@@ -4,6 +4,7 @@
 import argparse
 import contextlib
 import csv
+import glob
 import heapq
 import html
 import json
@@ -624,14 +625,355 @@ def schedule_stories(config, story_data, ordered_keys):
     return scheduled
 
 
+def plan_snapshot(scheduled, status_map, run_date):
+    """Return the plan of one run as a dict that can be stored as JSON.
+
+    Story "end" is the day after the last planned day, as in the scheduled stories.
+    """
+    stories = []
+    for s in scheduled:
+        progress = status_map.get(s["status"].lower(), 0)
+        stories.append({
+            "key": s["key"],
+            "title": s["title"],
+            "epic": s["epic"],
+            "epic_key": s.get("epic_key", ""),
+            "status": s["status"],
+            "progress": progress,
+            "total_hours": s["total_hours"],
+            "remaining_hours": s["effort"],
+            "start": s["start"],
+            "end": s["end"],
+        })
+    return {"date": run_date.isoformat(), "stories": stories}
+
+
+def load_snapshots(history_dir):
+    """Return all plan-YYYY-MM-DD.json snapshots in history_dir, oldest first."""
+    snapshots = []
+    for path in sorted(glob.glob(os.path.join(history_dir, "plan-*.json"))):
+        try:
+            with open(path, encoding="utf-8") as f:
+                snapshot = json.load(f)
+            date.fromisoformat(snapshot["date"])
+        except (OSError, ValueError, KeyError) as e:
+            print(f"Warning: skipping snapshot {path}: {e}", file=sys.stderr)
+            continue
+        snapshots.append(snapshot)
+    snapshots.sort(key=lambda s: s["date"])
+    return snapshots
+
+
+def pick_baseline(snapshots, run_date, since=None):
+    """Return the snapshot to compare with, or None.
+
+    Without since, this is the latest snapshot before run_date. With since, it is the
+    latest snapshot on or before that date, or the oldest snapshot if there is none.
+    """
+    earlier = [s for s in snapshots if s["date"] < run_date.isoformat()]
+    if since is None:
+        return earlier[-1] if earlier else None
+    on_or_before = [s for s in earlier if s["date"] <= since.isoformat()]
+    if on_or_before:
+        return on_or_before[-1]
+    if earlier:
+        print(f"Warning: no snapshot on or before {since}, using the oldest one of {earlier[0]['date']}",
+              file=sys.stderr)
+        return earlier[0]
+    return None
+
+
+def working_days_between(start, end, holidays):
+    """Return the number of weekdays that are not holidays from start up to end.
+
+    The result is negative when end is before start.
+    """
+    sign = 1
+    if end < start:
+        start, end, sign = end, start, -1
+    days = 0
+    d = start
+    while d < end:
+        if d.weekday() < 5 and d not in holidays:
+            days += 1
+        d += timedelta(days=1)
+    return sign * days
+
+
+def epic_spans(stories):
+    """Return {epic name: (first start, last end)} for a list of snapshot stories."""
+    spans = {}
+    for s in stories:
+        start, end = spans.get(s["epic"], (s["start"], s["end"]))
+        spans[s["epic"]] = (min(start, s["start"]), max(end, s["end"]))
+    return spans
+
+
+def compare_plans(baseline, current, holidays, today):
+    """Compare two snapshots and return the changes per story and per epic, and totals.
+
+    Returns a dict with:
+        since: date of the baseline
+        stories: {key: {is_new, base_start, base_end, base_total, hours_delta, moved_days, late}}
+        epics: {epic name: {base_start, base_end, moved_days}}
+        removed: [baseline story, ...] for open stories that are no longer in the plan
+        summary: totals for the summary box
+    """
+    base_by_key = {s["key"]: s for s in baseline["stories"]}
+    current_keys = {s["key"] for s in current["stories"]}
+    today_str = today.isoformat()
+
+    stories = {}
+    summary = {
+        "new": [], "new_hours": 0.0,
+        "grew": [], "grew_hours": 0.0,
+        "shrank": [], "shrank_hours": 0.0,
+        "late": [], "late_hours": 0.0,
+    }
+    for s in current["stories"]:
+        done = s["progress"] >= 1.0
+        base = base_by_key.get(s["key"])
+        if base is None:
+            stories[s["key"]] = {"is_new": True}
+            summary["new"].append(s)
+            summary["new_hours"] += s["remaining_hours"]
+            continue
+        change = {"is_new": False}
+        if not done:
+            change["base_start"] = base["start"]
+            change["base_end"] = base["end"]
+            change["moved_days"] = working_days_between(
+                date.fromisoformat(base["end"]), date.fromisoformat(s["end"]), holidays)
+            if base.get("total_hours") is not None:
+                change["base_total"] = base["total_hours"]
+                delta = s["total_hours"] - base["total_hours"]
+                if abs(delta) >= 0.5:
+                    change["hours_delta"] = delta
+                    if delta > 0:
+                        summary["grew"].append(s)
+                        summary["grew_hours"] += delta
+                    else:
+                        summary["shrank"].append(s)
+                        summary["shrank_hours"] += delta
+            if base["progress"] < 1.0 and base["end"] <= today_str:
+                change["late"] = True
+                summary["late"].append(s)
+                summary["late_hours"] += s["remaining_hours"]
+        stories[s["key"]] = change
+
+    removed = [s for s in baseline["stories"] if s["key"] not in current_keys and s["progress"] < 1.0]
+    summary["removed"] = removed
+    summary["removed_hours"] = sum(s["remaining_hours"] for s in removed)
+
+    epics = {}
+    base_spans = epic_spans(baseline["stories"])
+    for epic, (start, end) in epic_spans(current["stories"]).items():
+        if epic not in base_spans:
+            continue
+        base_start, base_end = base_spans[epic]
+        epics[epic] = {
+            "base_start": base_start,
+            "base_end": base_end,
+            "moved_days": working_days_between(date.fromisoformat(base_end), date.fromisoformat(end), holidays),
+        }
+
+    base_end = max((s["end"] for s in baseline["stories"]), default=None)
+    end = max((s["end"] for s in current["stories"]), default=None)
+    summary["base_end"] = base_end
+    summary["end"] = end
+    summary["moved_days"] = (working_days_between(date.fromisoformat(base_end), date.fromisoformat(end), holidays)
+                             if base_end and end else 0)
+    summary["base_remaining"] = sum(s["remaining_hours"] for s in baseline["stories"])
+    summary["remaining"] = sum(s["remaining_hours"] for s in current["stories"])
+
+    return {"since": baseline["date"], "stories": stories, "epics": epics, "removed": removed, "summary": summary}
+
+
+def format_day(iso_day):
+    """Return a YYYY-MM-DD string as "3 Dec 2026"."""
+    d = date.fromisoformat(iso_day)
+    return f"{d.day} {d.strftime('%b %Y')}"
+
+
+def format_last_day(iso_end):
+    """Return the last planned day for an end date that is the day after it, as "3 Dec 2026"."""
+    return format_day((date.fromisoformat(iso_end) - timedelta(days=1)).isoformat())
+
+
+def format_hours(hours):
+    """Return hours as "8h" or "7.5h"."""
+    return f"{hours:.0f}h" if hours == int(hours) else f"{hours:.1f}h"
+
+
+def format_signed(value, unit):
+    """Return a number with its sign and unit, for example "+8h" or "−3 working days"."""
+    sign = "+" if value > 0 else "−" if value < 0 else ""
+    number = format_hours(abs(value))[:-1] if unit == "h" else f"{abs(value):g}"
+    return f"{sign}{number}{unit}"
+
+
+def changes_summary_html(changes):
+    """Return the HTML of the box that explains how the plan changed since the baseline."""
+    s = changes["summary"]
+
+    def story_list(stories):
+        items = "".join(
+            f"<li><a href=\"{html.escape(JIRA_URL)}/browse/{html.escape(st['key'])}\" target=\"_blank\">"
+            f"{html.escape(st['key'])}</a>: {html.escape(st['title'])}</li>"
+            for st in stories
+        )
+        return f"<details><summary>Show stories</summary><ul>{items}</ul></details>" if stories else ""
+
+    def row(label, stories, hours):
+        count = len(stories)
+        noun = "story" if count == 1 else "stories"
+        return (f"<li><b>{count} {label.format(noun=noun)}</b>: {format_signed(hours, 'h')}"
+                f"{story_list(stories)}</li>")
+
+    if s["end"] and s["base_end"]:
+        moved = s["moved_days"]
+        days = format_signed(moved, " working days") if moved else "no change"
+        end_line = (f"<p>The plan end moved from <b>{format_last_day(s['base_end'])}</b> "
+                    f"to <b>{format_last_day(s['end'])}</b> ({days}).</p>")
+    else:
+        end_line = ""
+    return f"""<div id="changes-summary">
+<h3>Changes since {format_day(changes['since'])}</h3>
+{end_line}
+<p>Remaining work went from {format_hours(s['base_remaining'])} to {format_hours(s['remaining'])}.</p>
+<ul>
+{row("new {noun}", s["new"], s["new_hours"])}
+{row("{noun} with a larger estimate", s["grew"], s["grew_hours"])}
+{row("{noun} with a smaller estimate", s["shrank"], s["shrank_hours"])}
+{row("{noun} no longer in the plan", s["removed"], -s["removed_hours"])}
+<li><b>{len(s["late"])} {"story" if len(s["late"]) == 1 else "stories"} planned to be done by now but still open</b>:
+{format_hours(s["late_hours"])} remaining{story_list(s["late"])}</li>
+</ul>
+</div>"""
+
+
+def trend_html(snapshots, epic_color_map, holidays):
+    """Return the HTML of a milestone trend chart: the planned end of each epic at each run.
+
+    The x axis is the run date and the y axis the planned end date. A flat line means the
+    end date did not move. Only epics in epic_color_map are drawn, in their epic color.
+    """
+    if len(snapshots) < 2:
+        return ""
+    width, height = 900, 420
+    left, right, top, bottom = 90, 20, 20, 50
+    plot_w, plot_h = width - left - right, height - top - bottom
+
+    # {epic: [(run date, last planned day), ...]} and the same for the whole plan
+    series = {epic: [] for epic in epic_color_map}
+    whole_plan = []
+    for snap in snapshots:
+        run = date.fromisoformat(snap["date"])
+        for epic, (_, end) in epic_spans(snap["stories"]).items():
+            if epic in series:
+                series[epic].append((run, date.fromisoformat(end) - timedelta(days=1)))
+        if snap["stories"]:
+            last = max(s["end"] for s in snap["stories"])
+            whole_plan.append((run, date.fromisoformat(last) - timedelta(days=1)))
+    series = {epic: points for epic, points in series.items() if points}
+
+    runs = [date.fromisoformat(s["date"]) for s in snapshots]
+    all_ends = [d for points in series.values() for _, d in points] + [d for _, d in whole_plan]
+    x_min, x_max = runs[0], runs[-1]
+    y_min, y_max = min(all_ends + [x_min]), max(all_ends + [x_max])
+    x_span = max((x_max - x_min).days, 1)
+    y_span = max((y_max - y_min).days, 1)
+
+    def x(d):
+        return left + (d - x_min).days / x_span * plot_w
+
+    def y(d):
+        return top + plot_h - (d - y_min).days / y_span * plot_h
+
+    parts = [f'<svg id="trend-svg" viewBox="0 0 {width} {height}" role="img" '
+             f'aria-label="Planned end date of each epic at each run">']
+
+    # Horizontal grid lines and y labels at the first day of each month
+    d = date(y_min.year, y_min.month, 1)
+    while d <= y_max:
+        if d >= y_min:
+            parts.append(f'<line class="grid" x1="{left}" x2="{left + plot_w}" y1="{y(d):.1f}" y2="{y(d):.1f}"/>')
+            parts.append(f'<text class="axis" x="{left - 8}" y="{y(d) + 4:.1f}" text-anchor="end">'
+                         f'{d.strftime("%b %Y")}</text>')
+        d = date(d.year + (d.month == 12), d.month % 12 + 1, 1)
+
+    # X labels at the first day of each month
+    d = date(x_min.year, x_min.month, 1)
+    while d <= x_max:
+        if d >= x_min:
+            parts.append(f'<line class="grid" x1="{x(d):.1f}" x2="{x(d):.1f}" y1="{top}" y2="{top + plot_h}"/>')
+            parts.append(f'<text class="axis" x="{x(d):.1f}" y="{top + plot_h + 18}" text-anchor="middle">'
+                         f'{d.strftime("%b %Y")}</text>')
+        d = date(d.year + (d.month == 12), d.month % 12 + 1, 1)
+    parts.append(f'<text class="axis" x="{left + plot_w / 2:.0f}" y="{height - 6}" text-anchor="middle">Run date</text>')
+
+    # Diagonal where the planned end equals the run date: an epic that reaches it is done
+    lo, hi = max(x_min, y_min), min(x_max, y_max)
+    if lo < hi:
+        parts.append(f'<line class="diagonal" x1="{x(lo):.1f}" y1="{y(lo):.1f}" x2="{x(hi):.1f}" y2="{y(hi):.1f}"/>')
+
+    def draw(name, points, color, css_class):
+        coords = " ".join(f"{x(r):.1f},{y(e):.1f}" for r, e in points)
+        label = html.escape(name)
+        parts.append(f'<g class="trend-series {css_class}" data-epic="{label}">')
+        parts.append(f'<polyline points="{coords}" stroke="{color}"><title>{label}</title></polyline>')
+        for r, e in points:
+            parts.append(f'<circle cx="{x(r):.1f}" cy="{y(e):.1f}" r="4" fill="{color}">'
+                         f'<title>{label}\nRun {r.day} {r.strftime("%b %Y")}: '
+                         f'planned end {e.day} {e.strftime("%b %Y")}</title></circle>')
+        parts.append('</g>')
+
+    for epic, points in series.items():
+        draw(epic, points, epic_color_map[epic], "")
+    draw("Whole plan", whole_plan, "#333", "whole-plan")
+    parts.append('</svg>')
+
+    legend = "".join(
+        f'<span class="trend-legend-item" data-epic="{html.escape(epic)}">'
+        f'<span class="swatch" style="background:{color}"></span>{html.escape(epic)}</span>'
+        for epic, color in list(epic_color_map.items()) + [("Whole plan", "#333")]
+        if epic in series or epic == "Whole plan"
+    )
+
+    rows = []
+    for name, points in list(series.items()) + [("Whole plan", whole_plan)]:
+        first, last = points[0][1], points[-1][1]
+        moved = working_days_between(first + timedelta(days=1), last + timedelta(days=1), holidays)
+        rows.append(f"<tr><td>{html.escape(name)}</td>"
+                    f"<td>{first.day} {first.strftime('%b %Y')} ({points[0][0].day} {points[0][0].strftime('%b')})</td>"
+                    f"<td>{last.day} {last.strftime('%b %Y')}</td>"
+                    f"<td>{format_signed(moved, ' working days') if moved else 'no change'}</td></tr>")
+    table = ("<details><summary>Show as table</summary><table><tr><th>Epic</th><th>First planned end (run)</th>"
+             "<th>Latest planned end</th><th>Moved</th></tr>" + "".join(rows) + "</table></details>")
+
+    return f"""<div id="trend">
+<h3>Planned end date per run</h3>
+<p class="trend-help">Each line is an epic. A flat line means its planned end did not move.
+A rising line means it moved later. The gray diagonal shows where the planned end equals the run date.</p>
+<div id="trend-legend">{legend}</div>
+{"".join(parts)}
+{table}
+</div>"""
+
+
 EPIC_COLORS = [
     "#4e79a7", "#f28e2b", "#e15759", "#76b7b2", "#59a14f",
     "#edc948", "#b07aa1", "#ff9da7", "#9c755f", "#bab0ac",
 ]
 
 
-def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=(), status_colors=None):
-    """Write a self-contained HTML file with a DHTMLX Gantt chart."""
+def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=(), status_colors=None,
+                     changes=None, snapshots=()):
+    """Write a self-contained HTML file with a DHTMLX Gantt chart.
+
+    With changes (from compare_plans), the chart can mark what changed since the baseline.
+    With two or more snapshots, a trend chart of the planned end dates is added below it.
+    """
     # Assign colors to epics
     epics_seen = []
     for s in scheduled_stories:
@@ -695,6 +1037,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             "open": True,
             "story_key": epic_name_to_key.get(epic_name, ""),
             "progress": epic_progress,
+            **(changes["epics"].get(epic_name, {}) if changes else {}),
         })
 
     # Create story tasks as children of their epic
@@ -725,7 +1068,42 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             "color": epic_color_map[s["epic"]],
             "parent": epic_task_ids[s["epic"]],
             "story_key": s["key"],
+            **(changes["stories"].get(s["key"], {}) if changes else {}),
         })
+
+    # Open stories of the baseline that are no longer in the plan, in one group at the end
+    if changes and changes["removed"]:
+        removed = changes["removed"]
+        task_id += 1
+        group_id = task_id
+        tasks.append({
+            "id": group_id,
+            "text": "No longer in the plan",
+            "start_date": min(r["start"] for r in removed),
+            "end_date": max(r["end"] for r in removed),
+            "effort": format_hours(sum(r["remaining_hours"] for r in removed)),
+            "status": "",
+            "color": "#bbb",
+            "type": "project",
+            "open": True,
+            "progress": 0,
+            "removed": True,
+        })
+        for r in removed:
+            task_id += 1
+            tasks.append({
+                "id": task_id,
+                "text": f"{r['key']}: {r['title']} ({r['epic']})",
+                "start_date": r["start"],
+                "end_date": r["end"],
+                "progress": 0,
+                "effort": format_hours(r["remaining_hours"]),
+                "status": r["status"],
+                "color": "#bbb",
+                "parent": group_id,
+                "story_key": r["key"],
+                "removed": True,
+            })
 
     # Build dependency links
     links = []
@@ -752,6 +1130,18 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     tasks_json = json.dumps(tasks, indent=2)
     links_json = json.dumps(links, indent=2)
     holidays_json = json.dumps(sorted(d.isoformat() for d in holidays))
+    show_changes_json = "true" if changes else "false"
+    if changes:
+        since = format_day(changes["since"])
+        changes_toggle = (f'<label id="show-changes-wrap"><input type="checkbox" id="show-changes" checked '
+                          f'onchange="onShowChangesChange()"> Show changes since {since}</label>')
+        moved_column = (',\n  {name: "moved", label: "Moved", align: "center", width: 70, resize: true,'
+                        ' template: movedText}')
+    else:
+        changes_toggle = ""
+        moved_column = ""
+    summary_html = changes_summary_html(changes) if changes else ""
+    trend = trend_html(list(snapshots), epic_color_map, set(holidays))
 
     # Each status color has one CSS class, used on the grid row and the timeline row
     status_colors = status_colors or {}
@@ -818,6 +1208,34 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   .gantt_task_line.search-dim {{ opacity: 0.2; }}
   .gantt_row.search-match-row {{ background: #fff7c2 !important; font-weight: 600; }}
   .gantt_row.search-dim-row {{ opacity: 0.45; }}
+  #show-changes-wrap {{ display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }}
+  .gantt_row.change-new-row, .gantt_task_row.change-new-row {{ background: #fff3bf; }}
+  .gantt_row.change-removed-row {{ color: #999; text-decoration: line-through; }}
+  .gantt_task_line.change-removed {{ opacity: 0.5; }}
+  .gantt_task_line.change-late {{ box-shadow: 0 0 0 2px #d62728; }}
+  .delta-up {{ color: #c62828; font-weight: 600; }}
+  .delta-down {{ color: #2e7d32; font-weight: 600; }}
+  .baseline-bar {{ position: absolute; height: 3px; background: #888; border-radius: 2px; pointer-events: none; }}
+  #changes-summary, #trend {{ margin-top: 20px; padding: 10px 16px; background: #f8f8f8; border-radius: 6px; }}
+  #changes-summary h3, #trend h3 {{ margin: 4px 0 8px; }}
+  #changes-summary ul {{ margin: 6px 0; }}
+  #changes-summary details, #trend details {{ margin: 2px 0 6px; font-size: 13px; }}
+  #trend-svg {{ width: 100%; max-width: 900px; height: auto; display: block; background: #fff; }}
+  #trend-svg .grid {{ stroke: #e6e6e6; stroke-width: 1; }}
+  #trend-svg .axis {{ font-size: 11px; fill: #666; }}
+  #trend-svg .diagonal {{ stroke: #bbb; stroke-width: 1; stroke-dasharray: 4 4; }}
+  #trend-svg polyline {{ fill: none; stroke-width: 2; }}
+  #trend-svg .whole-plan polyline {{ stroke-width: 3; }}
+  #trend-svg circle {{ stroke: #fff; stroke-width: 2; }}
+  #trend-svg .trend-series {{ transition: opacity 0.15s; }}
+  #trend-svg.highlighting .trend-series {{ opacity: 0.15; }}
+  #trend-svg.highlighting .trend-series.active {{ opacity: 1; }}
+  #trend-legend {{ margin: 8px 0; font-size: 13px; }}
+  .trend-legend-item {{ display: inline-flex; align-items: center; margin-right: 16px; cursor: default; }}
+  .trend-legend-item .swatch {{ display: inline-block; width: 14px; height: 3px; margin-right: 6px; }}
+  .trend-help {{ font-size: 13px; color: #555; margin: 0; }}
+  #trend table {{ border-collapse: collapse; margin-top: 6px; }}
+  #trend th, #trend td {{ border: 1px solid #ddd; padding: 4px 10px; text-align: left; }}
   .tree-buttons {{ margin-left: 12px; }}
   .tree-buttons button {{
     padding: 1px 8px; margin-right: 4px; border: 1px solid #ccc; border-radius: 4px;
@@ -838,6 +1256,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     <button onclick="zoomToFit()">Fit All</button>
   </div>
   <label id="hide-done-wrap"><input type="checkbox" id="hide-done" checked onchange="onHideDoneChange()"> Hide done stories</label>
+  {changes_toggle}
   <div id="search-wrap">
     <input id="search-input" type="search" placeholder="Search stories, for example PROJ-123" oninput="onSearchInput()" onkeydown="if(event.key==='Escape'){{this.value='';onSearchInput();}}">
     <span id="search-count"></span>
@@ -845,9 +1264,34 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
 </div>
 <div id="legend">{legend_html}</div>
 <div id="gantt_here"></div>
+{summary_html}
+{trend}
 <script src="https://cdn.dhtmlx.com/gantt/9.0/dhtmlxgantt.js"></script>
 <script>
 gantt.plugins({{ tooltip: true, marker: true }});
+var showChanges = {show_changes_json};
+function signed(value, unit) {{
+  var number = Math.round(Math.abs(value) * 10) / 10;
+  return (value > 0 ? "+" : "\u2212") + number + unit;
+}}
+// Remaining hours, followed by the change of the estimate since the baseline.
+function effortText(task) {{
+  if (!showChanges || !task.hours_delta) return task.effort;
+  var cls = task.hours_delta > 0 ? "delta-up" : "delta-down";
+  return task.effort + " <span class='" + cls + "'>" + signed(task.hours_delta, "h") + "</span>";
+}}
+// "NEW" for a story that is not in the baseline, or the working days its end date moved.
+function movedText(task) {{
+  if (!showChanges) return "";
+  if (task.is_new) return "<span class='delta-up'>NEW</span>";
+  if (!task.moved_days) return "";
+  var cls = task.moved_days > 0 ? "delta-up" : "delta-down";
+  return "<span class='" + cls + "'>" + signed(task.moved_days, "d") + "</span>";
+}}
+function onShowChangesChange() {{
+  showChanges = document.getElementById("show-changes").checked;
+  gantt.render();
+}}
 gantt.config.date_format = "%Y-%m-%d";
 gantt.config.readonly = true;
 gantt.config.grid_resize = true;
@@ -858,13 +1302,23 @@ gantt.config.columns = [
       "<button onclick='setAllOpen(true); event.stopPropagation();'>Expand all</button></span>",
     template: function(task) {{ return "<span title='" + task.text.replace(/'/g, "&#39;") + "'>" + task.text + "</span>"; }} }},
   {{name: "status", label: "Status", align: "left", width: 120, resize: true}},
-  {{name: "effort", label: "Remaining", align: "center", width: 80, resize: true}}
+  {{name: "effort", label: "Remaining", align: "center", width: 100, resize: true, template: effortText}}{moved_column}
 ];
 gantt.templates.tooltip_text = function(start, end, task) {{
   if (!task.text) return "";
-  return "<b>" + task.text + "</b><br/>" +
-    gantt.date.date_to_str("%d %M %Y")(start) + " – " +
-    gantt.date.date_to_str("%d %M %Y")(end);
+  var fmt = gantt.date.date_to_str("%d %M %Y");
+  var text = "<b>" + task.text + "</b><br/>" + fmt(start) + " – " + fmt(gantt.date.add(end, -1, "day"));
+  if (!showChanges) return text;
+  if (task.is_new) text += "<br/>New since the baseline";
+  if (task.removed && task.parent) text += "<br/>No longer in the plan";
+  if (task.base_start) {{
+    var parse = gantt.date.str_to_date("%Y-%m-%d");
+    var baseEnd = gantt.date.add(parse(task.base_end), -1, "day");
+    text += "<br/>Baseline: " + fmt(parse(task.base_start)) + " – " + fmt(baseEnd);
+  }}
+  if (task.hours_delta) text += "<br/>Estimate: " + task.base_total + "h → " + (task.base_total + task.hours_delta) + "h";
+  if (task.late) text += "<br/>Planned to be done by now";
+  return text;
 }};
 gantt.config.open_tree_initial_level = 1;
 gantt.config.row_height = 32;
@@ -928,6 +1382,7 @@ function setZoom(level) {{
 var hideDone = false;
 var epicDates = {{}};  // {{epicId: {{start_date, end_date}}}} with the dates from all stories
 function isTaskShown(task) {{
+  if (task.removed) return showChanges;
   if (!hideDone) return true;
   if (task.type === "project") return !!openStoryDates(task.id);
   return task.progress < 1;
@@ -948,7 +1403,7 @@ gantt.attachEvent("onBeforeTaskDisplay", function(id, task) {{
 function onHideDoneChange() {{
   hideDone = document.getElementById("hide-done").checked;
   gantt.eachTask(function(task) {{
-    if (task.parent !== gantt.config.root_id) return;
+    if (task.parent !== gantt.config.root_id || task.removed) return;
     if (!epicDates[task.id]) epicDates[task.id] = {{ start_date: task.start_date, end_date: task.end_date }};
     var dates = hideDone ? openStoryDates(task.id) : null;
     // A "project" task takes its dates from all its children, so use a plain task while done stories are hidden.
@@ -962,7 +1417,8 @@ function onHideDoneChange() {{
 function shownDates() {{
   var start = null, end = null;
   gantt.eachTask(function(task) {{
-    if (!isTaskShown(task)) return;
+    // Stories that left the plan have old dates, so they do not count for the shown range
+    if (!isTaskShown(task) || task.removed) return;
     if (!start || task.start_date < start) start = task.start_date;
     if (!end || task.end_date > end) end = task.end_date;
   }});
@@ -991,8 +1447,21 @@ function zoomToFit() {{
 var searchTerm = "";
 var searchMatchIds = {{}};      // {{taskId: true}} for tasks whose own text matches
 var searchVisibleIds = {{}};    // {{taskId: true}} for matches + their ancestors (kept un-dimmed)
+function changeBarClass(task) {{
+  if (!showChanges) return "";
+  if (task.removed) return " change-removed";
+  return task.late ? " change-late" : "";
+}}
+function changeRowClass(task) {{
+  if (!showChanges) return "";
+  if (task.removed && task.parent) return "change-removed-row";
+  return task.is_new ? "change-new-row" : "";
+}}
+function joinClasses() {{
+  return Array.prototype.filter.call(arguments, Boolean).join(" ");
+}}
 gantt.templates.task_class = function(start, end, task) {{
-  var base = task.progress >= 1 ? "clickable-task task-done" : "clickable-task";
+  var base = (task.progress >= 1 ? "clickable-task task-done" : "clickable-task") + changeBarClass(task);
   if (!searchTerm) return base;
   if (searchMatchIds[task.id]) return base + " search-match";
   if (searchVisibleIds[task.id]) return base;
@@ -1003,10 +1472,10 @@ function statusRowClass(task) {{
   return statusClasses[(task.status || "").toLowerCase()] || "";
 }}
 gantt.templates.task_row_class = function(start, end, task) {{
-  return statusRowClass(task);
+  return joinClasses(statusRowClass(task), changeRowClass(task));
 }};
 gantt.templates.grid_row_class = function(start, end, task) {{
-  var base = ((task.progress >= 1 ? "task-done-row " : "") + statusRowClass(task)).trim();
+  var base = joinClasses(task.progress >= 1 ? "task-done-row" : "", statusRowClass(task), changeRowClass(task));
   if (!searchTerm) return base;
   if (searchMatchIds[task.id]) return (base + " search-match-row").trim();
   if (searchVisibleIds[task.id]) return base;
@@ -1045,6 +1514,7 @@ function onSearchInput() {{
   if (firstMatchId !== null) gantt.showTask(firstMatchId);
 }}
 gantt.templates.task_text = function(start, end, task) {{
+  if (task.removed) return task.text;
   return task.text + " " + Math.round(task.progress * 100) + "%";
 }};
 gantt.templates.rightside_text = function(start, end, task) {{
@@ -1061,6 +1531,32 @@ gantt.templates.timeline_cell_class = function(task, date) {{
   if (date.getDay() === 0 || date.getDay() === 6 || holidays.has(dayKey(date))) return "weekend";
   return "";
 }};
+// Thin gray bars at the baseline dates, under the real bars.
+function drawBaselineBars() {{
+  var area = gantt.$task_data;
+  if (!area) return;
+  var layer = document.getElementById("baseline-layer");
+  if (!layer || layer.parentNode !== area) {{
+    layer = document.createElement("div");
+    layer.id = "baseline-layer";
+    area.appendChild(layer);
+  }}
+  layer.innerHTML = "";
+  if (!showChanges) return;
+  var parse = gantt.date.str_to_date("%Y-%m-%d");
+  gantt.eachTask(function(task) {{
+    if (!task.base_start || !gantt.isTaskVisible(task.id)) return;
+    var pos = gantt.getTaskPosition(task, parse(task.base_start), parse(task.base_end));
+    var bar = document.createElement("div");
+    bar.className = "baseline-bar";
+    bar.style.left = pos.left + "px";
+    bar.style.width = Math.max(pos.width, 2) + "px";
+    // pos.top is the top of the row and the bar is centered in it
+    bar.style.top = Math.round(pos.top + (pos.rowHeight + pos.height) / 2) + 1 + "px";
+    layer.appendChild(bar);
+  }});
+}}
+gantt.attachEvent("onDataRender", drawBaselineBars);
 gantt.init("gantt_here");
 gantt.addMarker({{ start_date: new Date(), css: "today-marker", text: "Today" }});
 (function() {{
@@ -1080,6 +1576,20 @@ gantt.addMarker({{ start_date: new Date(), css: "today-marker", text: "Today" }}
 }})();
 gantt.parse({{ data: {tasks_json}, links: {links_json} }});
 onHideDoneChange();
+(function() {{
+  var svg = document.getElementById("trend-svg");
+  if (!svg) return;
+  function highlight(epic) {{
+    svg.classList.toggle("highlighting", !!epic);
+    svg.querySelectorAll(".trend-series").forEach(function(g) {{
+      g.classList.toggle("active", g.getAttribute("data-epic") === epic);
+    }});
+  }}
+  document.querySelectorAll(".trend-legend-item, #trend-svg .trend-series").forEach(function(el) {{
+    el.addEventListener("mouseenter", function() {{ highlight(el.getAttribute("data-epic")); }});
+    el.addEventListener("mouseleave", function() {{ highlight(null); }});
+  }});
+}})();
 document.getElementById("gantt_here").addEventListener("click", function(e) {{
   var bar = e.target.closest(".gantt_task_line");
   if (!bar) return;
@@ -1118,8 +1628,12 @@ def discover_fields():
     print("Set JIRA_STORY_POINTS_FIELD in .env to the field name that contains your story points.", file=sys.stderr)
 
 
-def run_gantt(config_path):
-    """Fetch the configured stories, schedule them and print a Gantt chart as HTML."""
+def run_gantt(config_path, history_dir=None, since=None):
+    """Fetch the configured stories, schedule them and print a Gantt chart as HTML.
+
+    With history_dir, the plan is also stored there as plan-YYYY-MM-DD.json, and the chart
+    shows the changes since an earlier snapshot and the trend over all snapshots.
+    """
     config = load_gantt_config(config_path)
 
     # Expand epics into stories
@@ -1190,7 +1704,27 @@ def run_gantt(config_path):
 
     scheduled = schedule_stories(config, story_data, ordered_keys)
     print(f"Scheduled {len(scheduled)} stories.", file=sys.stderr)
-    write_gantt_html(scheduled, config.statuses, config.dependencies, config.holidays, config.status_colors)
+    changes = None
+    snapshots = []
+    if history_dir:
+        today = date.today()
+        current = plan_snapshot(scheduled, config.statuses, today)
+        snapshots = [snap for snap in load_snapshots(history_dir) if snap["date"] != current["date"]]
+        snapshots.append(current)
+        baseline = pick_baseline(snapshots, today, since)
+        if baseline:
+            changes = compare_plans(baseline, current, config.holidays, today)
+            print(f"Comparing with the snapshot of {baseline['date']}.", file=sys.stderr)
+        else:
+            print(f"No earlier snapshot in {history_dir}, so there are no changes to show.", file=sys.stderr)
+        os.makedirs(history_dir, exist_ok=True)
+        snapshot_path = os.path.join(history_dir, f"plan-{current['date']}.json")
+        with open(snapshot_path, "w", encoding="utf-8") as f:
+            json.dump(current, f, indent=1)
+        print(f"Wrote {snapshot_path}", file=sys.stderr)
+
+    write_gantt_html(scheduled, config.statuses, config.dependencies, config.holidays, config.status_colors,
+                     changes, snapshots)
 
 
 def run_export(fmt):
@@ -1286,13 +1820,22 @@ def build_parser():
     gantt_parser.add_argument("-c", "--config", metavar="FILE", default="gantt.toml",
                               help="planning configuration (default: gantt.toml)")
     gantt_parser.add_argument("-o", "--output", metavar="FILE", help="write to FILE instead of standard output")
+    gantt_parser.add_argument("--history", metavar="DIR",
+                              help="store a snapshot of the plan in DIR, and show the changes and the trend "
+                                   "from the snapshots there")
+    gantt_parser.add_argument("--since", metavar="YYYY-MM-DD", type=date.fromisoformat,
+                              help="compare with the latest snapshot on or before this date "
+                                   "(default: the latest snapshot before the current day)")
 
     subparsers.add_parser("fields", help="list the numeric fields of one story, to find the story points field")
     return parser
 
 
 def main():
-    args = build_parser().parse_args()
+    parser = build_parser()
+    args = parser.parse_args()
+    if getattr(args, "since", None) and not args.history:
+        parser.error("--since needs --history")
     validate_config()
 
     if args.command == "fields":
@@ -1303,51 +1846,7 @@ def main():
     try:
         with contextlib.redirect_stdout(output):
             if args.command == "gantt":
-                run_gantt(args.config)
-            else:
-                run_export(args.command)
-    finally:
-        if args.output:
-            output.close()
-    if args.output:
-        print(f"Wrote {args.output}", file=sys.stderr)
-
-
-def build_parser():
-    parser = argparse.ArgumentParser(
-        prog="jira_smurf.py",
-        description="Export Jira Cloud stories as CSV or HTML, or plan them in a Gantt chart.",
-    )
-    subparsers = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
-
-    csv_parser = subparsers.add_parser("csv", help="export all stories of the project as CSV")
-    csv_parser.add_argument("-o", "--output", metavar="FILE", help="write to FILE instead of standard output")
-
-    html_parser = subparsers.add_parser("html", help="export all stories of the project as an HTML table")
-    html_parser.add_argument("-o", "--output", metavar="FILE", help="write to FILE instead of standard output")
-
-    gantt_parser = subparsers.add_parser("gantt", help="schedule the configured stories and write a Gantt chart")
-    gantt_parser.add_argument("-c", "--config", metavar="FILE", default="gantt.toml",
-                              help="planning configuration (default: gantt.toml)")
-    gantt_parser.add_argument("-o", "--output", metavar="FILE", help="write to FILE instead of standard output")
-
-    subparsers.add_parser("fields", help="list the numeric fields of one story, to find the story points field")
-    return parser
-
-
-def main():
-    args = build_parser().parse_args()
-    validate_config()
-
-    if args.command == "fields":
-        discover_fields()
-        return
-
-    output = open(args.output, "w", encoding="utf-8", newline="") if args.output else sys.stdout
-    try:
-        with contextlib.redirect_stdout(output):
-            if args.command == "gantt":
-                run_gantt(args.config)
+                run_gantt(args.config, args.history, args.since)
             else:
                 run_export(args.command)
     finally:

@@ -40,11 +40,13 @@ python jira_smurf.py csv -o stories.csv         # CSV to a file
 python jira_smurf.py html -o stories.html       # HTML table
 python jira_smurf.py gantt -o gantt.html        # Gantt chart, uses gantt.toml
 python jira_smurf.py gantt -c other.toml -o gantt.html
+python jira_smurf.py gantt -o gantt.html --history plannings                    # also show changes and trend
+python jira_smurf.py gantt -o gantt.html --history plannings --since 2026-10-01
 python jira_smurf.py fields                     # find the story points field
 python jira_smurf.py --help
 ```
 
-`./generate-gantt.sh` writes the chart to `plannings/gantt-YYYY-MM-DD.html` and opens it. It uses `open`, so it works on macOS.
+`./generate-gantt.sh` writes the chart to `plannings/gantt-YYYY-MM-DD.html` and opens it. It uses `--history plannings`, and it passes extra arguments such as `--since 2026-10-01` to the `gantt` command. It uses `open`, so it works on macOS.
 
 Progress messages go to standard error, so they do not end up in the output.
 
@@ -88,6 +90,23 @@ How the planning works:
 In the chart you can zoom, search for a story and hide done stories. Click a bar to open the story in Jira.
 The buttons in the Story column header collapse or expand all epics.
 In the day view, weekends and holidays have a gray background.
+
+### Changes and trend
+
+With `--history DIR`, each run stores its plan in `DIR/plan-YYYY-MM-DD.json`. A second run on the same day replaces that file. The chart then compares the plan with an earlier snapshot, the baseline. The baseline is the latest snapshot before the current day. With `--since YYYY-MM-DD`, it is the latest snapshot on or before that date.
+
+The checkbox "Show changes since …" in the toolbar turns these marks on and off:
+
+- A new story has a yellow row and a red NEW in the Moved column.
+- A story with a changed estimate shows the change next to its remaining hours, for example `16h +8h`.
+- A thin gray bar under a story or epic shows its dates in the baseline.
+- The Moved column shows how many working days the end date moved.
+- A story that the baseline planned to be done by now, but that is still open, has a red outline.
+- Open stories that are no longer in the plan are listed in a gray group at the end of the chart.
+
+Below the chart, a summary shows how far the plan end moved and why: new stories, changed estimates, stories that left the plan and late stories.
+
+With two or more snapshots, a trend chart shows the planned end of each epic at each run. A flat line means the end date did not move. A rising line means it moved later.
 
 ## Notes
 
