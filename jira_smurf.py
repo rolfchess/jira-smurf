@@ -1211,24 +1211,6 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
         for name, cls in status_classes.items()
     )
 
-    # Build legend HTML
-    legend_items = []
-    for epic, color in epic_color_map.items():
-        legend_items.append(
-            f'<span style="display:inline-flex;align-items:center;margin-right:18px;">'
-            f'<span style="display:inline-block;width:16px;height:16px;background:{color};'
-            f'border-radius:3px;margin-right:6px;"></span>{html.escape(epic)}</span>'
-        )
-    statuses_seen = {s["status"].lower(): s["status"] for s in scheduled_stories}
-    for name, color in status_colors.items():
-        label = statuses_seen.get(name, name)
-        legend_items.append(
-            f'<span style="display:inline-flex;align-items:center;margin-right:18px;">'
-            f'<span style="display:inline-block;width:16px;height:16px;background:{color};'
-            f'border:1px solid #ccc;border-radius:3px;margin-right:6px;"></span>{html.escape(label)}</span>'
-        )
-    legend_html = "\n".join(legend_items)
-
     print(f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1237,8 +1219,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
 <link rel="stylesheet" href="https://cdn.dhtmlx.com/gantt/9.0/dhtmlxgantt.css">
 <style>
   body {{ font-family: sans-serif; margin: 20px; }}
-  #legend {{ margin-bottom: 16px; padding: 10px; background: #f8f8f8; border-radius: 6px; }}
-  #gantt_here {{ width: 100%; height: calc(100vh - 160px); }}
+  #gantt_here {{ width: 100%; height: calc(100vh - 110px); }}
   .gantt_task_line.task-done {{ opacity: 0.45; filter: grayscale(60%); }}
   .gantt_task_line.task-done .gantt_task_content {{ text-decoration: line-through; }}
   .gantt_row.task-done-row {{ color: #999; }}
@@ -1321,7 +1302,6 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     <span id="search-count"></span>
   </div>
 </div>
-<div id="legend">{legend_html}</div>
 <div id="gantt_here"></div>
 {summary_html}
 {trend}
@@ -1616,6 +1596,18 @@ function drawBaselineBars() {{
   }});
 }}
 gantt.attachEvent("onDataRender", drawBaselineBars);
+// Make the chart as tall as its shown rows, but no taller than the window.
+function fitHeight() {{
+  var content = gantt.config.scale_height + gantt.getVisibleTaskCount() * gantt.config.row_height +
+    (gantt.config.scroll_size || 20) + 2;
+  var height = Math.max(150, Math.min(content, window.innerHeight - 110)) + "px";
+  var container = document.getElementById("gantt_here");
+  if (container.style.height === height) return;
+  container.style.height = height;
+  gantt.setSizes();
+}}
+gantt.attachEvent("onDataRender", fitHeight);
+window.addEventListener("resize", fitHeight);
 gantt.init("gantt_here");
 gantt.addMarker({{ start_date: new Date(), css: "today-marker", text: "Today" }});
 (function() {{
