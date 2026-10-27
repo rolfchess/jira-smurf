@@ -1,5 +1,7 @@
 # jira-smurf
 
+![](./example-gantt.png)
+
 A command line tool for Jira Cloud. It can:
 
 - export all stories of a project as CSV or as an HTML table, grouped by epic;
