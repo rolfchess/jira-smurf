@@ -86,6 +86,7 @@ How the planning works:
 - Stories that are not done start on today's date at the earliest.
 
 In the chart you can zoom, search for a story and hide done stories. Click a bar to open the story in Jira.
+The buttons in the Story column header collapse or expand all epics.
 In the day view, weekends and holidays have a gray background.
 
 ## Notes

@@ -818,6 +818,12 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   .gantt_task_line.search-dim {{ opacity: 0.2; }}
   .gantt_row.search-match-row {{ background: #fff7c2 !important; font-weight: 600; }}
   .gantt_row.search-dim-row {{ opacity: 0.45; }}
+  .tree-buttons {{ margin-left: 12px; }}
+  .tree-buttons button {{
+    padding: 1px 8px; margin-right: 4px; border: 1px solid #ccc; border-radius: 4px;
+    background: #fff; cursor: pointer; font-size: 11px;
+  }}
+  .tree-buttons button:hover {{ background: #e8e8e8; }}
 {status_css}
 </style>
 </head>
@@ -846,7 +852,10 @@ gantt.config.date_format = "%Y-%m-%d";
 gantt.config.readonly = true;
 gantt.config.grid_resize = true;
 gantt.config.columns = [
-  {{name: "text", label: "Story", width: 400, tree: true, resize: true,
+  {{name: "text", width: 400, tree: true, resize: true,
+    label: "Story <span class='tree-buttons'>" +
+      "<button onclick='setAllOpen(false); event.stopPropagation();'>Collapse all</button>" +
+      "<button onclick='setAllOpen(true); event.stopPropagation();'>Expand all</button></span>",
     template: function(task) {{ return "<span title='" + task.text.replace(/'/g, "&#39;") + "'>" + task.text + "</span>"; }} }},
   {{name: "status", label: "Status", align: "left", width: 120, resize: true}},
   {{name: "effort", label: "Remaining", align: "center", width: 80, resize: true}}
@@ -900,6 +909,16 @@ gantt.ext.zoom.init({{
   ]
 }});
 gantt.ext.zoom.setLevel("week"); // initial level before fit
+// Open or close every epic, so the chart shows all stories or only the epics.
+function setAllOpen(open) {{
+  gantt.batchUpdate(function() {{
+    gantt.eachTask(function(task) {{
+      if (!gantt.hasChild(task.id)) return;
+      if (open) gantt.open(task.id);
+      else gantt.close(task.id);
+    }});
+  }});
+}}
 function setZoom(level) {{
   gantt.ext.zoom.setLevel(level);
   document.querySelectorAll("#toolbar button").forEach(function(b) {{
