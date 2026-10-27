@@ -174,6 +174,7 @@ class GanttConfig:
     include_future_sprints: bool
     holidays: set  # {date, ...} — days off for the whole team
     status_colors: dict  # {lowercase_name: css_color}
+    work_start_progress: float  # progress of the status where work on a story starts, 0 if not set
 
 
 def parse_dates(setting, values, path):
@@ -272,6 +273,15 @@ def load_gantt_config(path="gantt.toml"):
             print(f"Error: status '{name}' progress must be 0–100, got {val}", file=sys.stderr)
             sys.exit(1)
 
+    # This is the optional status where work on a story starts, used for the dates of done stories
+    work_starts_at = raw.get("work_starts_at")
+    work_start_progress = 0.0
+    if work_starts_at is not None:
+        if not isinstance(work_starts_at, str) or work_starts_at.lower() not in statuses:
+            print(f"Error: 'work_starts_at' must be a status from [statuses], got {work_starts_at!r}", file=sys.stderr)
+            sys.exit(1)
+        work_start_progress = statuses[work_starts_at.lower()]
+
     # Parse optional [status_colors] section — maps status name to a row background color
     status_colors_raw = raw.get("status_colors", {})
     if not isinstance(status_colors_raw, dict):
@@ -318,7 +328,8 @@ def load_gantt_config(path="gantt.toml"):
                        include_open_sprints=include_open_sprints,
                        include_future_sprints=include_future_sprints,
                        holidays=holidays,
-                       status_colors=status_colors)
+                       status_colors=status_colors,
+                       work_start_progress=work_start_progress)
 
 
 def fetch_stories_for_epic(epic_key):
@@ -422,6 +433,46 @@ def fetch_sprint_stories(include_open, include_future):
     return issues
 
 
+def fetch_status_changes(issue_key):
+    """Return the status changes of a story as a list of (date, new status name), oldest first."""
+    changes = []
+    start_at = 0
+    while True:
+        data = jira_get(f"issue/{issue_key}/changelog", params={"startAt": start_at, "maxResults": 100})
+        values = data.get("values", [])
+        for history in values:
+            day = date.fromisoformat(history["created"][:10])
+            for item in history.get("items", []):
+                if item.get("field") == "status":
+                    changes.append((day, item.get("toString") or ""))
+        start_at += len(values)
+        if data.get("isLast", True) or not values:
+            break
+    changes.sort(key=lambda change: change[0])
+    return changes
+
+
+def work_dates(status_changes, statuses, work_start_progress=0.0):
+    """Return (first day of work, day it was done) from a story's status changes, or None.
+
+    The first day of work is the first change to a status with progress above 0 and at least
+    work_start_progress. The day it was done is the last change to a status with progress 100.
+    The result is None if there is no such change.
+    """
+    start = end = None
+    for day, status in status_changes:
+        progress = statuses.get(status.lower(), 0)
+        if progress > 0 and progress >= work_start_progress and start is None:
+            start = day
+        if progress >= 1.0:
+            end = day
+    if end is None:
+        return None
+    if start is None or start > end:
+        start = end
+    return start, end
+
+
 def resolve_epic_for_issue(issue, epic_cache):
     """Resolve epic name for an issue, using and updating the cache."""
     cache_key = None
@@ -507,13 +558,16 @@ def topological_sort(keys, dependencies):
     return result
 
 
-def schedule_stories(config, story_data, ordered_keys):
+def schedule_stories(config, story_data, ordered_keys, done_dates=None):
     """Schedule stories onto team members based on availability.
 
     ordered_keys is the merged, deduplicated list of story keys (epics first, then individual).
+    done_dates is {story_key: (first day, last day)} for done stories with known dates. Those
+    stories are placed on these days. Other done stories are placed at the start of the plan.
     Returns list of dicts with keys:
         key, title, epic, assignee, status, start, end
     """
+    done_dates = done_dates or {}
     # Topologically sort so dependencies are always scheduled before dependents
     ordered_keys = topological_sort(ordered_keys, config.dependencies)
 
@@ -571,37 +625,42 @@ def schedule_stories(config, story_data, ordered_keys):
         avail = config.team[member]
         cursor = member_states[member]
 
-        # Apply dependency constraints: story cannot start before all deps finish
-        deps = config.dependencies.get(story_key, [])
-        if deps:
-            for dep_key in deps:
-                if dep_key in story_end_dates:
-                    dep_end = story_end_dates[dep_key]
-                    if dep_end > cursor:
-                        cursor = dep_end
-                elif dep_key not in story_data:
-                    print(f"Warning: dependency {dep_key} for {story_key} not in scheduled set, ignoring", file=sys.stderr)
-
-        # Non-done stories cannot start in the past
-        if progress < 1.0:
-            today = date.today()
-            if cursor < today:
-                cursor = today
-
-        cursor = next_working_day(cursor, avail)
-        start_date = cursor
-        remaining = hours
-
-        if remaining <= 0:
-            # Zero-hour story: give it a 1-day bar so it's visible
-            end_date = cursor
-            cursor += timedelta(days=1)
+        if progress >= 1.0 and story_key in done_dates:
+            # A done story is shown on the days it was worked on, from its Jira status history
+            start_date, end_date = done_dates[story_key]
+            cursor = end_date + timedelta(days=1)
         else:
-            while remaining > 0:
-                cursor = next_working_day(cursor, avail)
-                remaining -= hours_on(cursor, avail)
+            # Apply dependency constraints: story cannot start before all dependencies finish
+            deps = config.dependencies.get(story_key, [])
+            if deps:
+                for dep_key in deps:
+                    if dep_key in story_end_dates:
+                        dep_end = story_end_dates[dep_key]
+                        if dep_end > cursor:
+                            cursor = dep_end
+                    elif dep_key not in story_data:
+                        print(f"Warning: dependency {dep_key} for {story_key} not in scheduled set, ignoring", file=sys.stderr)
+
+            # Non-done stories cannot start in the past
+            if progress < 1.0:
+                today = date.today()
+                if cursor < today:
+                    cursor = today
+
+            cursor = next_working_day(cursor, avail)
+            start_date = cursor
+            remaining = hours
+
+            if remaining <= 0:
+                # Zero-hour story: give it a 1-day bar so it's visible
                 end_date = cursor
                 cursor += timedelta(days=1)
+            else:
+                while remaining > 0:
+                    cursor = next_working_day(cursor, avail)
+                    remaining -= hours_on(cursor, avail)
+                    end_date = cursor
+                    cursor += timedelta(days=1)
 
         if progress < 1.0:
             # Only advance availability for stories that aren't done
@@ -1703,7 +1762,22 @@ def run_gantt(config_path, history_dir=None, since=None):
         issue["_epic_key"] = (parent.get("key", "") if parent
                               else issue["fields"].get("customfield_10014", ""))
 
-    scheduled = schedule_stories(config, story_data, ordered_keys)
+    # Place done stories on the days they were worked on, from their status history
+    done_keys = [key for key in ordered_keys
+                 if config.statuses.get(story_data[key]["fields"].get("status", {}).get("name", "").lower(), 0) >= 1.0]
+    done_dates = {}
+    if done_keys:
+        print(f"Fetching the status history of {len(done_keys)} done stories...", file=sys.stderr)
+        for key in done_keys:
+            dates = work_dates(fetch_status_changes(key), config.statuses, config.work_start_progress)
+            if dates:
+                done_dates[key] = dates
+        missing = len(done_keys) - len(done_dates)
+        if missing:
+            print(f"  {missing} done {'story has' if missing == 1 else 'stories have'} no change to a done status "
+                  f"in the history, so the plan start is used", file=sys.stderr)
+
+    scheduled = schedule_stories(config, story_data, ordered_keys, done_dates)
     print(f"Scheduled {len(scheduled)} stories.", file=sys.stderr)
     changes = None
     snapshots = []

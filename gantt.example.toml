@@ -6,6 +6,7 @@ default_hours = 40              # hours for stories without story point estimate
 velocity = 8.0                  # hours per story point
 include_open_sprints = false    # also add all stories in the active sprint
 include_future_sprints = false  # also add all stories in future sprints
+work_starts_at = "In Progress"  # a done story's bar starts at this status or a later one
 
 # These are days off for the whole team, written as YYYY-MM-DD.
 holidays = [

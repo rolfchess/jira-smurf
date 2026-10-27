@@ -72,6 +72,7 @@ The `gantt` command reads `gantt.toml`. See [`gantt.example.toml`](gantt.example
 | `velocity`               | Hours per story point.                                                                                 |
 | `include_open_sprints`   | `true` also adds all stories in the active sprint.                                                     |
 | `include_future_sprints` | `true` also adds all stories in future sprints.                                                        |
+| `work_starts_at`         | This is the status where work on a story starts, for example `"In Progress"`. A done story's bar starts on the first change to this status, or to a status with more progress. |
 | `holidays`               | This is a list of days off for the whole team, for example `["2026-12-25", "2026-12-26"]`.            |
 | `[team."Name"]`          | Hours per weekday (`mon` to `fri`) for each team member. The name must match the display name in Jira. |
 | `auto_assign`            | Per team member. `false` means the member gets no unassigned stories. Such a member may have no hours. |
@@ -87,6 +88,7 @@ How the planning works:
 - A story assigned in Jira to a team member goes to that member. Other stories go to the auto-assign member who is free first.
 - Remaining work is the estimate times (1 minus the progress of the status).
 - Stories that are not done start on today's date at the earliest.
+- A done story is placed from its Jira status history. It starts on the first change to the `work_starts_at` status or a status with more progress. Without `work_starts_at`, it starts on the first change to a status with progress above 0. It ends on the last change to a status at 100. A done story without such a change is placed at the start of the plan.
 
 In the chart you can zoom, search for a story and hide done stories. Click a bar to open the story in Jira.
 The buttons in the Story column header collapse or expand all epics.
