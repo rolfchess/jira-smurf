@@ -338,7 +338,7 @@ def fetch_stories_for_epic(epic_key):
     Tries next-gen (parent) first, falls back to classic (Epic Link).
     Returns list of issue dicts.
     """
-    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10028"
+    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10028,duedate"
 
     for jql in (
         f"parent = {epic_key} AND issuetype = Story ORDER BY key ASC",
@@ -374,7 +374,7 @@ def fetch_stories_by_keys(story_keys):
     """Fetch specific stories by their Jira keys."""
     keys_str = ", ".join(story_keys)
     jql = f"key in ({keys_str})"
-    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10028"
+    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10028,duedate"
     issues = []
     next_page_token = None
 
@@ -412,7 +412,7 @@ def fetch_sprint_stories(include_open, include_future):
         sprint_functions.append("futureSprints()")
     sprint_clause = " OR ".join(f"sprint in {f}" for f in sprint_functions)
     jql = f"project = {JIRA_PROJECT} AND issuetype = Story AND ({sprint_clause}) ORDER BY key ASC"
-    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10028"
+    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10028,duedate"
     issues = []
     next_page_token = None
 
@@ -675,6 +675,7 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
             "assignee": member,
             "status": status,
             "sprint": sprint,
+            "due": issue["fields"].get("duedate") or "",
             "effort": 0 if progress >= 1.0 else hours,
             "total_hours": total_hours,
             "start": start_date.isoformat(),
@@ -1127,6 +1128,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             "color": epic_color_map[s["epic"]],
             "parent": epic_task_ids[s["epic"]],
             "story_key": s["key"],
+            "due_date": s.get("due", ""),
             **(changes["stories"].get(s["key"], {}) if changes else {}),
         })
 
@@ -1236,7 +1238,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   }}
   #toolbar button:hover {{ background: #e8e8e8; }}
   #toolbar button.active {{ background: #4e79a7; color: #fff; border-color: #4e79a7; }}
-  #hide-done-wrap {{ display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }}
+  #show-done-wrap {{ display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }}
   #search-wrap {{ display: flex; align-items: center; gap: 6px; margin-left: auto; }}
   #search-input {{
     padding: 5px 10px; border: 1px solid #ccc; border-radius: 4px;
@@ -1255,6 +1257,8 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   .gantt_task_line.change-late {{ box-shadow: 0 0 0 2px #d62728; }}
   .delta-up {{ color: #c62828; font-weight: 600; }}
   .delta-down {{ color: #2e7d32; font-weight: 600; }}
+  .due-marker {{ position: absolute; width: 10px; height: 10px; background: #d62728; border: 1px solid #fff;
+    transform: rotate(45deg); pointer-events: none; z-index: 2; }}
   .baseline-bar {{ position: absolute; height: 3px; background: #888; border-radius: 2px; pointer-events: none; }}
   #changes-summary, #trend {{ margin-top: 20px; padding: 10px 16px; background: #f8f8f8; border-radius: 6px; }}
   #changes-summary h3, #trend h3 {{ margin: 4px 0 8px; }}
@@ -1295,7 +1299,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     <button onclick="setZoom('quarter')">Quarter</button>
     <button onclick="zoomToFit()">Fit All</button>
   </div>
-  <label id="hide-done-wrap"><input type="checkbox" id="hide-done" checked onchange="onHideDoneChange()"> Hide done stories</label>
+  <label id="show-done-wrap"><input type="checkbox" id="show-done" onchange="onShowDoneChange()"> Show done stories</label>
   {changes_toggle}
   <div id="search-wrap">
     <input id="search-input" type="search" placeholder="Search stories, for example PROJ-123" oninput="onSearchInput()" onkeydown="if(event.key==='Escape'){{this.value='';onSearchInput();}}">
@@ -1347,6 +1351,10 @@ gantt.templates.tooltip_text = function(start, end, task) {{
   if (!task.text) return "";
   var fmt = gantt.date.date_to_str("%d %M %Y");
   var text = "<b>" + task.text + "</b><br/>" + fmt(start) + " – " + fmt(gantt.date.add(end, -1, "day"));
+  if (task.due_date) {{
+    var due = gantt.date.str_to_date("%Y-%m-%d")(task.due_date);
+    text += "<br/>Due: " + fmt(due) + (end > gantt.date.add(due, 1, "day") ? " (planned to end later)" : "");
+  }}
   if (!showChanges) return text;
   if (task.is_new) text += "<br/>New since the baseline";
   if (task.removed && task.parent) text += "<br/>No longer in the plan";
@@ -1439,8 +1447,8 @@ function openStoryDates(epicId) {{
 gantt.attachEvent("onBeforeTaskDisplay", function(id, task) {{
   return isTaskShown(task);
 }});
-function onHideDoneChange() {{
-  hideDone = document.getElementById("hide-done").checked;
+function onShowDoneChange() {{
+  hideDone = !document.getElementById("show-done").checked;
   gantt.eachTask(function(task) {{
     if (task.parent !== gantt.config.root_id || task.removed) return;
     if (!epicDates[task.id]) epicDates[task.id] = {{ start_date: task.start_date, end_date: task.end_date }};
@@ -1596,6 +1604,31 @@ function drawBaselineBars() {{
   }});
 }}
 gantt.attachEvent("onDataRender", drawBaselineBars);
+// A red diamond at the end of the due day of each story with a due date in Jira.
+function drawDueMarkers() {{
+  var area = gantt.$task_data;
+  if (!area) return;
+  var layer = document.getElementById("due-layer");
+  if (!layer || layer.parentNode !== area) {{
+    layer = document.createElement("div");
+    layer.id = "due-layer";
+    area.appendChild(layer);
+  }}
+  layer.innerHTML = "";
+  var parse = gantt.date.str_to_date("%Y-%m-%d");
+  gantt.eachTask(function(task) {{
+    if (!task.due_date || !gantt.isTaskVisible(task.id)) return;
+    var dayAfter = gantt.date.add(parse(task.due_date), 1, "day");
+    var pos = gantt.getTaskPosition(task, dayAfter, dayAfter);
+    var marker = document.createElement("div");
+    marker.className = "due-marker";
+    // The marker is 12px wide with its border, so move it back by half of that
+    marker.style.left = Math.round(pos.left - 6) + "px";
+    marker.style.top = Math.round(pos.top + pos.rowHeight / 2 - 6) + "px";
+    layer.appendChild(marker);
+  }});
+}}
+gantt.attachEvent("onDataRender", drawDueMarkers);
 // Make the chart as tall as its shown rows, but no taller than the window.
 function fitHeight() {{
   var content = gantt.config.scale_height + gantt.getVisibleTaskCount() * gantt.config.row_height +
@@ -1626,7 +1659,7 @@ gantt.addMarker({{ start_date: new Date(), css: "today-marker", text: "Today" }}
   }});
 }})();
 gantt.parse({{ data: {tasks_json}, links: {links_json} }});
-onHideDoneChange();
+onShowDoneChange();
 (function() {{
   var svg = document.getElementById("trend-svg");
   if (!svg) return;

@@ -90,9 +90,10 @@ How the planning works:
 - Stories that are not done start on today's date at the earliest.
 - A done story is placed from its Jira status history. It starts on the first change to the `work_starts_at` status or a status with more progress. Without `work_starts_at`, it starts on the first change to a status with progress above 0. It ends on the last change to a status at 100. A done story without such a change is placed at the start of the plan.
 
-In the chart you can zoom, search for a story and hide done stories. Click a bar to open the story in Jira.
+In the chart you can zoom, search for a story and show or hide done stories. Done stories are hidden at first. Click a bar to open the story in Jira.
 The buttons in the Story column header collapse or expand all epics.
 In the day view, weekends and holidays have a gray background.
+A story with a due date in Jira has a red diamond at the end of its due day. If the bar goes past the diamond, the story is planned to end after its due date.
 
 ### Changes and trend
 
