@@ -1632,7 +1632,8 @@ def run_gantt(config_path, history_dir=None, since=None):
     """Fetch the configured stories, schedule them and print a Gantt chart as HTML.
 
     With history_dir, the plan is also stored there as plan-YYYY-MM-DD.json, and the chart
-    shows the changes since an earlier snapshot and the trend over all snapshots.
+    shows the trend over all snapshots. With since, the chart also shows the changes since an
+    earlier snapshot: since is a date, or "last" for the latest snapshot before the current day.
     """
     config = load_gantt_config(config_path)
 
@@ -1711,12 +1712,13 @@ def run_gantt(config_path, history_dir=None, since=None):
         current = plan_snapshot(scheduled, config.statuses, today)
         snapshots = [snap for snap in load_snapshots(history_dir) if snap["date"] != current["date"]]
         snapshots.append(current)
-        baseline = pick_baseline(snapshots, today, since)
-        if baseline:
-            changes = compare_plans(baseline, current, config.holidays, today)
-            print(f"Comparing with the snapshot of {baseline['date']}.", file=sys.stderr)
-        else:
-            print(f"No earlier snapshot in {history_dir}, so there are no changes to show.", file=sys.stderr)
+        if since:
+            baseline = pick_baseline(snapshots, today, None if since == "last" else since)
+            if baseline:
+                changes = compare_plans(baseline, current, config.holidays, today)
+                print(f"Comparing with the snapshot of {baseline['date']}.", file=sys.stderr)
+            else:
+                print(f"No earlier snapshot in {history_dir}, so there are no changes to show.", file=sys.stderr)
         os.makedirs(history_dir, exist_ok=True)
         snapshot_path = os.path.join(history_dir, f"plan-{current['date']}.json")
         with open(snapshot_path, "w", encoding="utf-8") as f:
@@ -1803,6 +1805,16 @@ def write_html(rows, columns):
     print("</body></html>")
 
 
+def parse_since(value):
+    """Return the --since value as a date, or "last" when it is "last"."""
+    if value == "last":
+        return value
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"'{value}' is not a date in the form YYYY-MM-DD")
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="jira_smurf.py",
@@ -1823,9 +1835,9 @@ def build_parser():
     gantt_parser.add_argument("--history", metavar="DIR",
                               help="store a snapshot of the plan in DIR, and show the changes and the trend "
                                    "from the snapshots there")
-    gantt_parser.add_argument("--since", metavar="YYYY-MM-DD", type=date.fromisoformat,
-                              help="compare with the latest snapshot on or before this date "
-                                   "(default: the latest snapshot before the current day)")
+    gantt_parser.add_argument("--since", metavar="YYYY-MM-DD", nargs="?", const="last", type=parse_since,
+                              help="show the changes since the latest snapshot on or before this date; "
+                                   "without a date, since the latest snapshot before the current day")
 
     subparsers.add_parser("fields", help="list the numeric fields of one story, to find the story points field")
     return parser

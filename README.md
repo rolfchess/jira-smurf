@@ -40,13 +40,14 @@ python jira_smurf.py csv -o stories.csv         # CSV to a file
 python jira_smurf.py html -o stories.html       # HTML table
 python jira_smurf.py gantt -o gantt.html        # Gantt chart, uses gantt.toml
 python jira_smurf.py gantt -c other.toml -o gantt.html
-python jira_smurf.py gantt -o gantt.html --history plannings                    # also show changes and trend
-python jira_smurf.py gantt -o gantt.html --history plannings --since 2026-10-01
+python jira_smurf.py gantt -o gantt.html --history plannings                    # store a snapshot, show the trend
+python jira_smurf.py gantt -o gantt.html --history plannings --since            # also show changes since the last run
+python jira_smurf.py gantt -o gantt.html --history plannings --since 2026-10-01 # also show changes since a date
 python jira_smurf.py fields                     # find the story points field
 python jira_smurf.py --help
 ```
 
-`./generate-gantt.sh` writes the chart to `plannings/gantt-YYYY-MM-DD.html` and opens it. It uses `--history plannings`, and it passes extra arguments such as `--since 2026-10-01` to the `gantt` command. It uses `open`, so it works on macOS.
+`./generate-gantt.sh` writes the chart to `plannings/gantt-YYYY-MM-DD.html` and opens it. It uses `--history plannings`, and it passes extra arguments such as `--since` or `--since 2026-10-01` to the `gantt` command. It uses `open`, so it works on macOS.
 
 Progress messages go to standard error, so they do not end up in the output.
 
@@ -93,7 +94,9 @@ In the day view, weekends and holidays have a gray background.
 
 ### Changes and trend
 
-With `--history DIR`, each run stores its plan in `DIR/plan-YYYY-MM-DD.json`. A second run on the same day replaces that file. The chart then compares the plan with an earlier snapshot, the baseline. The baseline is the latest snapshot before the current day. With `--since YYYY-MM-DD`, it is the latest snapshot on or before that date, or the oldest snapshot if there is none before it. The run prints a warning when the snapshot is not of that exact date.
+With `--history DIR`, each run stores its plan in `DIR/plan-YYYY-MM-DD.json`. A second run on the same day replaces that file.
+
+With `--since`, the chart also compares the plan with an earlier snapshot, the baseline. Without a date, the baseline is the latest snapshot before the current day. With `--since YYYY-MM-DD`, it is the latest snapshot on or before that date, or the oldest snapshot if there is none before it. The run prints a warning when the snapshot is not of that exact date. Without `--since`, the chart shows no changes.
 
 The checkbox "Show changes since …" in the toolbar turns these marks on and off:
 
