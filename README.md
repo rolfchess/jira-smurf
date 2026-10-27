@@ -69,8 +69,10 @@ The `gantt` command reads `gantt.toml`. See [`gantt.example.toml`](gantt.example
 | `velocity`               | Hours per story point.                                                                                 |
 | `include_open_sprints`   | `true` also adds all stories in the active sprint.                                                     |
 | `include_future_sprints` | `true` also adds all stories in future sprints.                                                        |
+| `holidays`               | This is a list of days off for the whole team, for example `["2026-12-25", "2026-12-26"]`.            |
 | `[team."Name"]`          | Hours per weekday (`mon` to `fri`) for each team member. The name must match the display name in Jira. |
 | `auto_assign`            | Per team member. `false` means the member gets no unassigned stories. Such a member may have no hours. |
+| `days_off`               | This is set per team member. It is a list of days off, for example `["2026-12-10", "2026-12-18 to 2027-01-01"]`. A range includes both days. No work is planned on those days. |
 | `[statuses]`             | Progress in percent for each Jira status. A story at 100 is done.                                      |
 | `[epics.KEY]`            | Plan all stories of this epic.                                                                         |
 | `[stories.KEY]`          | Plan this story. `depends_on = ["KEY"]` makes it start after the listed stories finish.                |
@@ -83,6 +85,7 @@ How the planning works:
 - Stories that are not done start on today's date at the earliest.
 
 In the chart you can zoom, search for a story and hide done stories. Click a bar to open the story in Jira.
+In the day view, weekends and holidays have a gray background.
 
 ## Notes
 

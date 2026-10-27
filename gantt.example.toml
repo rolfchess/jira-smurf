@@ -7,15 +7,36 @@ velocity = 8.0                  # hours per story point
 include_open_sprints = false    # also add all stories in the active sprint
 include_future_sprints = false  # also add all stories in future sprints
 
+# These are days off for the whole team, written as YYYY-MM-DD.
+holidays = [
+    "2026-01-01",  # New Year's Day
+    "2026-04-06",  # Easter Monday
+    "2026-04-27",  # King's Day
+    "2026-05-14",  # Ascension Day
+    "2026-05-25",  # Whit Monday
+    "2026-12-25",  # Christmas Day
+    "2026-12-26",  # Boxing Day
+    "2027-01-01",  # New Year's Day
+    "2027-03-29",  # Easter Monday
+    "2027-04-27",  # King's Day
+    "2027-05-06",  # Ascension Day
+    "2027-05-17",  # Whit Monday
+    "2027-12-25",  # Christmas Day
+    "2027-12-26",  # Boxing Day
+]
+
 [team]
 # Each member has hours per weekday. The name must match the display name in Jira.
 # Set auto_assign = false to keep a member out of auto-assigning. Such a member may have no hours.
+# List vacation days and other days off in days_off, as YYYY-MM-DD. The member works 0 hours on those days.
+# Write "YYYY-MM-DD to YYYY-MM-DD" for a range. A range includes both days.
 [team."Alice Baker"]
 mon = 8
 tue = 8
 wed = 8
 thu = 8
 fri = 6
+days_off = ["2026-02-16", "2026-07-20 to 2026-08-07"]
 
 [team."Bob Carter"]
 mon = 8

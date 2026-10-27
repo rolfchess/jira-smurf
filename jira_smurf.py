@@ -161,7 +161,7 @@ def get_story_points_numeric(fields):
 @dataclass
 class GanttConfig:
     start_date: date
-    team: dict  # {name: {mon: N, tue: N, ...}}
+    team: dict  # {name: {mon: N, tue: N, ..., days_off: {date, ...}}}
     stories: list  # [key, ...] — ordered list of story keys
     epics: list  # [key, ...] — ordered list of epic keys
     statuses: dict  # {lowercase_name: progress_0_to_1}
@@ -170,6 +170,36 @@ class GanttConfig:
     dependencies: dict  # {story_key: [dep_key, ...]}
     include_open_sprints: bool
     include_future_sprints: bool
+    holidays: set  # {date, ...} — days off for the whole team
+
+
+def parse_dates(setting, values, path):
+    """Return a list of dates as a set of dates.
+
+    Each entry is a TOML date, a "YYYY-MM-DD" string, or a "YYYY-MM-DD to YYYY-MM-DD"
+    range that includes both ends.
+    """
+    if not isinstance(values, list):
+        print(f"Error: {setting} in {path} must be a list of dates", file=sys.stderr)
+        sys.exit(1)
+    result = set()
+    for day in values:
+        if isinstance(day, date):
+            result.add(day)
+            continue
+        try:
+            first, _, last = day.partition(" to ")
+            first = date.fromisoformat(first.strip())
+            last = date.fromisoformat(last.strip()) if last else first
+        except (AttributeError, ValueError):
+            print(f"Error: '{day}' in {setting} in {path} must be YYYY-MM-DD "
+                  f"or YYYY-MM-DD to YYYY-MM-DD", file=sys.stderr)
+            sys.exit(1)
+        if last < first:
+            print(f"Error: '{day}' in {setting} in {path} ends before it starts", file=sys.stderr)
+            sys.exit(1)
+        result.update(first + timedelta(days=i) for i in range((last - first).days + 1))
+    return result
 
 
 def load_gantt_config(path="gantt.toml"):
@@ -198,6 +228,9 @@ def load_gantt_config(path="gantt.toml"):
         print(f"Warning: start_date {start} is a weekend, advancing to {monday}", file=sys.stderr)
         start = monday
 
+    # Holidays are days off for the whole team
+    holidays = parse_dates("'holidays'", raw.get("holidays", []), path)
+
     # Validate team
     team = raw.get("team", {})
     if not team:
@@ -208,6 +241,8 @@ def load_gantt_config(path="gantt.toml"):
         if not isinstance(auto_assign, bool):
             print(f"Error: 'auto_assign' for team member '{name}' must be true or false, got {auto_assign!r}", file=sys.stderr)
             sys.exit(1)
+        days_off = parse_dates(f"'days_off' for team member '{name}'", avail.get("days_off", []), path)
+        avail["days_off"] = days_off | holidays
         if auto_assign and not has_working_hours(avail):
             print(f"Error: team member '{name}' has no working hours configured. "
                   f"Add hours or set auto_assign = false", file=sys.stderr)
@@ -266,7 +301,8 @@ def load_gantt_config(path="gantt.toml"):
                        default_hours=default_hours, velocity=velocity,
                        dependencies=dependencies,
                        include_open_sprints=include_open_sprints,
-                       include_future_sprints=include_future_sprints)
+                       include_future_sprints=include_future_sprints,
+                       holidays=holidays)
 
 
 def fetch_stories_for_epic(epic_key):
@@ -391,13 +427,18 @@ def resolve_epic_for_issue(issue, epic_cache):
 DAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
 
+def hours_on(d, availability):
+    """Return the hours this member works on date d. A day off has 0 hours."""
+    if d in availability.get("days_off", ()):
+        return 0
+    return availability.get(DAY_KEYS[d.weekday()], 0)
+
+
 def next_working_day(d, availability):
     """Advance to the next day where this member has hours > 0."""
-    while True:
-        day_key = DAY_KEYS[d.weekday()]
-        if availability.get(day_key, 0) > 0:
-            return d
+    while hours_on(d, availability) <= 0:
         d += timedelta(days=1)
+    return d
 
 
 def has_working_hours(availability):
@@ -542,9 +583,7 @@ def schedule_stories(config, story_data, ordered_keys):
         else:
             while remaining > 0:
                 cursor = next_working_day(cursor, avail)
-                day_key = DAY_KEYS[cursor.weekday()]
-                day_hours = avail.get(day_key, 0)
-                remaining -= day_hours
+                remaining -= hours_on(cursor, avail)
                 end_date = cursor
                 cursor += timedelta(days=1)
 
@@ -576,7 +615,7 @@ EPIC_COLORS = [
 ]
 
 
-def write_gantt_html(scheduled_stories, status_map, dependencies=None):
+def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=()):
     """Write a self-contained HTML file with a DHTMLX Gantt chart."""
     # Assign colors to epics
     epics_seen = []
@@ -697,6 +736,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None):
 
     tasks_json = json.dumps(tasks, indent=2)
     links_json = json.dumps(links, indent=2)
+    holidays_json = json.dumps(sorted(d.isoformat() for d in holidays))
 
     # Build legend HTML
     legend_items = []
@@ -954,9 +994,12 @@ gantt.templates.rightside_text = function(start, end, task) {{
   parts.push(gantt.date.date_to_str("%d %M")(end));
   return "<span style='font-size:11px;color:#666;'>" + parts.join(" \u2022 ") + "</span>";
 }};
+var holidays = new Set({holidays_json});
+var dayKey = gantt.date.date_to_str("%Y-%m-%d");
 gantt.templates.timeline_cell_class = function(task, date) {{
   var scale = gantt.getState().scale_unit;
-  if (scale === "day" && (date.getDay() === 0 || date.getDay() === 6)) return "weekend";
+  if (scale !== "day") return "";
+  if (date.getDay() === 0 || date.getDay() === 6 || holidays.has(dayKey(date))) return "weekend";
   return "";
 }};
 gantt.init("gantt_here");
@@ -1088,7 +1131,7 @@ def run_gantt(config_path):
 
     scheduled = schedule_stories(config, story_data, ordered_keys)
     print(f"Scheduled {len(scheduled)} stories.", file=sys.stderr)
-    write_gantt_html(scheduled, config.statuses, config.dependencies)
+    write_gantt_html(scheduled, config.statuses, config.dependencies, config.holidays)
 
 
 def run_export(fmt):
