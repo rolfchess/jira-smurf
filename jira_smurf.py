@@ -1474,8 +1474,8 @@ function shownDates() {{
 function zoomToFit() {{
   var project = shownDates();
   if (!project.start_date || !project.end_date) return;
-  gantt.config.start_date = hideDone ? project.start_date : undefined;
-  gantt.config.end_date = hideDone ? gantt.date.add(project.end_date, 1, "day") : undefined;
+  gantt.config.start_date = project.start_date;
+  gantt.config.end_date = gantt.date.add(project.end_date, 1, "day");
   var areaWidth = gantt.$task.offsetWidth;
   var levels = ["day", "week", "month", "quarter"];
   // Pick the most detailed level that fits, trying "day" first
@@ -1490,6 +1490,12 @@ function zoomToFit() {{
     }}
   }}
   setZoom(best);
+  // A long range does not fit even at the widest level, so make its columns narrower
+  var count = gantt.getScale().count;
+  if (count * gantt.config.min_column_width > areaWidth) {{
+    gantt.config.min_column_width = Math.max(20, Math.floor(areaWidth / count));
+    gantt.render();
+  }}
 }}
 var searchTerm = "";
 var searchMatchIds = {{}};      // {{taskId: true}} for tasks whose own text matches
