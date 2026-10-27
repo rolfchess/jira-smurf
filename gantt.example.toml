@@ -1,0 +1,54 @@
+# Example planning configuration for `jira_smurf.py gantt`.
+# Copy this file to gantt.toml and change it to match your team and project.
+
+start_date = "2026-01-05"       # first day of the planning, YYYY-MM-DD
+default_hours = 40              # hours for stories without story point estimates
+velocity = 8.0                  # hours per story point
+include_open_sprints = false    # also add all stories in the active sprint
+include_future_sprints = false  # also add all stories in future sprints
+
+[team]
+# Each member has hours per weekday. The name must match the display name in Jira.
+# Set auto_assign = false to keep a member out of auto-assigning. Such a member may have no hours.
+[team."Alice Baker"]
+mon = 8
+tue = 8
+wed = 8
+thu = 8
+fri = 6
+
+[team."Bob Carter"]
+mon = 8
+tue = 8
+wed = 0
+thu = 8
+fri = 8
+
+[team."Carol Dixon"]
+mon = 4
+tue = 4
+wed = 4
+thu = 4
+fri = 4
+auto_assign = false
+
+[statuses]
+# Progress in percent for each Jira status. A story at 100 is done.
+"To Do" = 0
+"Refinement" = 1
+"Ready for Development" = 5
+"In Progress" = 20
+"Code Review" = 80
+"Done" = 100
+
+[epics]
+# All stories of these epics are planned, in this order.
+[epics.ACME-100] # Customer sign-up
+[epics.ACME-200] # Invoice export
+
+[stories]
+# Single stories to plan, outside the epics above.
+[stories.ACME-310] # Fix login timeout
+
+[stories.ACME-320] # Add audit log
+depends_on = ["ACME-310"]   # optional: the story starts after the listed stories finish

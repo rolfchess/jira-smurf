@@ -1,0 +1,14 @@
+# Secrets and local configuration
+.env
+gantt.toml
+.claude/settings.local.json
+
+# Generated output
+plannings/
+*.csv
+/*.html
+
+# Python
+__pycache__/
+*.pyc
+.venv/
