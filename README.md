@@ -74,6 +74,7 @@ The `gantt` command reads `gantt.toml`. See [`gantt.example.toml`](gantt.example
 | `auto_assign`            | Per team member. `false` means the member gets no unassigned stories. Such a member may have no hours. |
 | `days_off`               | This is set per team member. It is a list of days off, for example `["2026-12-10", "2026-12-18 to 2027-01-01"]`. A range includes both days. No work is planned on those days. |
 | `[statuses]`             | Progress in percent for each Jira status. A story at 100 is done.                                      |
+| `[status_colors]`        | This sets a row background color for each Jira status, for example `"Blocked" = "#ffcccc"`.      |
 | `[epics.KEY]`            | Plan all stories of this epic.                                                                         |
 | `[stories.KEY]`          | Plan this story. `depends_on = ["KEY"]` makes it start after the listed stories finish.                |
 

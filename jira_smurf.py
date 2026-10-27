@@ -8,6 +8,7 @@ import heapq
 import html
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -171,6 +172,7 @@ class GanttConfig:
     include_open_sprints: bool
     include_future_sprints: bool
     holidays: set  # {date, ...} — days off for the whole team
+    status_colors: dict  # {lowercase_name: css_color}
 
 
 def parse_dates(setting, values, path):
@@ -269,6 +271,18 @@ def load_gantt_config(path="gantt.toml"):
             print(f"Error: status '{name}' progress must be 0–100, got {val}", file=sys.stderr)
             sys.exit(1)
 
+    # Parse optional [status_colors] section — maps status name to a row background color
+    status_colors_raw = raw.get("status_colors", {})
+    if not isinstance(status_colors_raw, dict):
+        print(f"Error: [status_colors] in {path} must be a table", file=sys.stderr)
+        sys.exit(1)
+    for name, color in status_colors_raw.items():
+        if not isinstance(color, str) or not re.fullmatch(r"[#\w(),.%\s]+", color):
+            print(f"Error: color for status '{name}' must be a CSS color such as \"#ffcccc\", got {color!r}",
+                  file=sys.stderr)
+            sys.exit(1)
+    status_colors = {name.lower(): color for name, color in status_colors_raw.items()}
+
     # Parse optional [epics] section
     epics_raw = raw.get("epics", {})
     epic_keys = list(epics_raw.keys())
@@ -302,7 +316,8 @@ def load_gantt_config(path="gantt.toml"):
                        dependencies=dependencies,
                        include_open_sprints=include_open_sprints,
                        include_future_sprints=include_future_sprints,
-                       holidays=holidays)
+                       holidays=holidays,
+                       status_colors=status_colors)
 
 
 def fetch_stories_for_epic(epic_key):
@@ -615,7 +630,7 @@ EPIC_COLORS = [
 ]
 
 
-def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=()):
+def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=(), status_colors=None):
     """Write a self-contained HTML file with a DHTMLX Gantt chart."""
     # Assign colors to epics
     epics_seen = []
@@ -738,6 +753,15 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     links_json = json.dumps(links, indent=2)
     holidays_json = json.dumps(sorted(d.isoformat() for d in holidays))
 
+    # Each status color has one CSS class, used on the grid row and the timeline row
+    status_colors = status_colors or {}
+    status_classes = {name: f"status-color-{i}" for i, name in enumerate(status_colors)}
+    status_classes_json = json.dumps(status_classes)
+    status_css = "\n".join(
+        f"  .gantt_row.{cls}, .gantt_task_row.{cls} {{ background: {status_colors[name]}; }}"
+        for name, cls in status_classes.items()
+    )
+
     # Build legend HTML
     legend_items = []
     for epic, color in epic_color_map.items():
@@ -745,6 +769,14 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             f'<span style="display:inline-flex;align-items:center;margin-right:18px;">'
             f'<span style="display:inline-block;width:16px;height:16px;background:{color};'
             f'border-radius:3px;margin-right:6px;"></span>{html.escape(epic)}</span>'
+        )
+    statuses_seen = {s["status"].lower(): s["status"] for s in scheduled_stories}
+    for name, color in status_colors.items():
+        label = statuses_seen.get(name, name)
+        legend_items.append(
+            f'<span style="display:inline-flex;align-items:center;margin-right:18px;">'
+            f'<span style="display:inline-block;width:16px;height:16px;background:{color};'
+            f'border:1px solid #ccc;border-radius:3px;margin-right:6px;"></span>{html.escape(label)}</span>'
         )
     legend_html = "\n".join(legend_items)
 
@@ -786,6 +818,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   .gantt_task_line.search-dim {{ opacity: 0.2; }}
   .gantt_row.search-match-row {{ background: #fff7c2 !important; font-weight: 600; }}
   .gantt_row.search-dim-row {{ opacity: 0.45; }}
+{status_css}
 </style>
 </head>
 <body>
@@ -946,8 +979,15 @@ gantt.templates.task_class = function(start, end, task) {{
   if (searchVisibleIds[task.id]) return base;
   return base + " search-dim";
 }};
+var statusClasses = {status_classes_json};  // {{lowercase status: CSS class}} for the row background
+function statusRowClass(task) {{
+  return statusClasses[(task.status || "").toLowerCase()] || "";
+}}
+gantt.templates.task_row_class = function(start, end, task) {{
+  return statusRowClass(task);
+}};
 gantt.templates.grid_row_class = function(start, end, task) {{
-  var base = task.progress >= 1 ? "task-done-row" : "";
+  var base = ((task.progress >= 1 ? "task-done-row " : "") + statusRowClass(task)).trim();
   if (!searchTerm) return base;
   if (searchMatchIds[task.id]) return (base + " search-match-row").trim();
   if (searchVisibleIds[task.id]) return base;
@@ -1131,7 +1171,7 @@ def run_gantt(config_path):
 
     scheduled = schedule_stories(config, story_data, ordered_keys)
     print(f"Scheduled {len(scheduled)} stories.", file=sys.stderr)
-    write_gantt_html(scheduled, config.statuses, config.dependencies, config.holidays)
+    write_gantt_html(scheduled, config.statuses, config.dependencies, config.holidays, config.status_colors)
 
 
 def run_export(fmt):

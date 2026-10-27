@@ -59,8 +59,13 @@ auto_assign = false
 "Refinement" = 1
 "Ready for Development" = 5
 "In Progress" = 20
+"Blocked" = 0
 "Code Review" = 80
 "Done" = 100
+
+[status_colors]
+# This setting is optional. Stories with one of these Jira statuses get this background color on their row.
+"Blocked" = "#ffcccc"
 
 [epics]
 # All stories of these epics are planned, in this order.
