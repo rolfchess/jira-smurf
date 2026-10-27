@@ -93,7 +93,7 @@ In the day view, weekends and holidays have a gray background.
 
 ### Changes and trend
 
-With `--history DIR`, each run stores its plan in `DIR/plan-YYYY-MM-DD.json`. A second run on the same day replaces that file. The chart then compares the plan with an earlier snapshot, the baseline. The baseline is the latest snapshot before the current day. With `--since YYYY-MM-DD`, it is the latest snapshot on or before that date.
+With `--history DIR`, each run stores its plan in `DIR/plan-YYYY-MM-DD.json`. A second run on the same day replaces that file. The chart then compares the plan with an earlier snapshot, the baseline. The baseline is the latest snapshot before the current day. With `--since YYYY-MM-DD`, it is the latest snapshot on or before that date, or the oldest snapshot if there is none before it. The run prints a warning when the snapshot is not of that exact date.
 
 The checkbox "Show changes since …" in the toolbar turns these marks on and off:
 

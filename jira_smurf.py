@@ -665,22 +665,22 @@ def load_snapshots(history_dir):
 
 
 def pick_baseline(snapshots, run_date, since=None):
-    """Return the snapshot to compare with, or None.
+    """Return the snapshot to compare with, or None. A snapshot of run_date is never used.
 
-    Without since, this is the latest snapshot before run_date. With since, it is the
-    latest snapshot on or before that date, or the oldest snapshot if there is none.
+    Without since, this is the latest snapshot. With since, it is the latest snapshot on or
+    before that date, or the oldest snapshot if there is none before it.
     """
     earlier = [s for s in snapshots if s["date"] < run_date.isoformat()]
+    if not earlier:
+        return None
     if since is None:
-        return earlier[-1] if earlier else None
+        return earlier[-1]
     on_or_before = [s for s in earlier if s["date"] <= since.isoformat()]
-    if on_or_before:
-        return on_or_before[-1]
-    if earlier:
-        print(f"Warning: no snapshot on or before {since}, using the oldest one of {earlier[0]['date']}",
-              file=sys.stderr)
-        return earlier[0]
-    return None
+    baseline = on_or_before[-1] if on_or_before else earlier[0]
+    if baseline["date"] != since.isoformat():
+        print(f"Warning: there is no earlier snapshot of {since} to compare with, "
+              f"using the one of {baseline['date']}", file=sys.stderr)
+    return baseline
 
 
 def working_days_between(start, end, holidays):
