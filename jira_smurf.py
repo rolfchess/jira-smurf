@@ -1950,6 +1950,16 @@ def run_gantt(config_path, history_dir=None, since=None):
             json.dump(current, f, indent=1)
         print(f"Wrote {snapshot_path}", file=sys.stderr)
 
+    # Stories that left the plan come from an older snapshot, which may not have their issue type
+    if changes:
+        untyped = [r for r in changes["removed"] if not r.get("issue_type_icon_url")]
+        if untyped:
+            found = fetch_stories_by_keys([r["key"] for r in untyped])
+            for r in untyped:
+                issue_type = (found.get(r["key"], {}).get("fields", {}).get("issuetype")) or {}
+                r["issue_type"] = issue_type.get("name", "")
+                r["issue_type_icon_url"] = issue_type.get("iconUrl", "")
+
     # Put the Jira issue type icons into the page, so it shows them without a Jira login
     epic_icon_url = find_epic_icon_url(story_data.values())
     icon_urls = [s["issue_type_icon_url"] for s in scheduled if s["issue_type_icon_url"]]
