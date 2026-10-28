@@ -195,6 +195,7 @@ class GanttConfig:
     order_epics_by_rank: bool  # show the epic rows in the order of the Jira Rank of the epics
     dependency_links: list  # lowercase names of Jira link types that make a story wait for another
     auto_assign: bool  # give stories without a team member to the team; if False, plan them under "Unassigned"
+    assign_by_epic: bool  # auto-assign a story to the member with the most stories in its epic
 
 
 def parse_dates(setting, values, path):
@@ -344,6 +345,7 @@ def load_gantt_config(path="gantt.toml"):
     include_future_sprints = raw.get("include_future_sprints", False)
     use_backlog_order = raw.get("use_backlog_order", False)
     order_epics_by_rank = raw.get("order_epics_by_rank", False)
+    assign_by_epic = raw.get("assign_by_epic", True)
     dependency_links = raw.get("dependency_links", ["Blocks"])
     if not isinstance(dependency_links, list) or not all(isinstance(name, str) for name in dependency_links):
         print(f"Error: 'dependency_links' must be a list of Jira link type names, got {dependency_links!r}",
@@ -352,7 +354,8 @@ def load_gantt_config(path="gantt.toml"):
     for name, val in (("include_open_sprints", include_open_sprints),
                       ("include_future_sprints", include_future_sprints),
                       ("use_backlog_order", use_backlog_order),
-                      ("order_epics_by_rank", order_epics_by_rank)):
+                      ("order_epics_by_rank", order_epics_by_rank),
+                      ("assign_by_epic", assign_by_epic)):
         if not isinstance(val, bool):
             print(f"Error: '{name}' must be true or false, got {val!r}", file=sys.stderr)
             sys.exit(1)
@@ -374,7 +377,8 @@ def load_gantt_config(path="gantt.toml"):
                        use_backlog_order=use_backlog_order,
                        order_epics_by_rank=order_epics_by_rank,
                        dependency_links=[name.lower() for name in dependency_links],
-                       auto_assign=auto_assign_team)
+                       auto_assign=auto_assign_team,
+                       assign_by_epic=assign_by_epic)
 
 
 def fetch_stories_for_epic(epic_key):
@@ -712,6 +716,15 @@ def get_earliest_available_member(member_states, team):
     return min(candidates, key=lambda name: member_states[name])
 
 
+def get_epic_member(epic_counts, member_states, team):
+    """Return the auto-assign member with the most stories in an epic, or the one who is free first.
+
+    epic_counts is {member: number of stories in the epic}. A tie goes to the member who is free first.
+    """
+    candidates = [name for name in member_states if team[name].get("auto_assign", True)]
+    return max(candidates, key=lambda name: (epic_counts.get(name, 0), -member_states[name].toordinal()))
+
+
 def topological_sort(keys, dependencies):
     """Sort keys so dependencies come before dependents.
 
@@ -789,6 +802,16 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
         if has_working_hours(availability[name]):
             member_states[name] = next_working_day(config.start_date, availability[name])
 
+    # {epic key: {member: number of stories}} with the auto-assign members who have stories in the epic,
+    # in Jira or from earlier in this plan. Auto-assign gives a story to the member with the most.
+    epic_members = {}
+    for issue in story_data.values():
+        name = get_assignee(issue["fields"])
+        epic_key = issue.get("_epic_key")
+        if epic_key and name in member_states and availability[name].get("auto_assign", True):
+            counts = epic_members.setdefault(epic_key, {})
+            counts[name] = counts.get(name, 0) + 1
+
     scheduled = []
     story_end_dates = {}  # {story_key: end_date} for dependency resolution
 
@@ -833,7 +856,13 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
                 action = "auto-assigning" if config.auto_assign else f"planning under '{UNASSIGNED}'"
                 if assignee_name in config.team:
                     print(f"Warning: assignee '{assignee_name}' for {story_key} has no working hours, {action}", file=sys.stderr)
-                if config.auto_assign:
+                epic_key = issue.get("_epic_key")
+                if config.auto_assign and config.assign_by_epic and epic_key:
+                    # Keep the stories of an epic with the same member where possible
+                    counts = epic_members.setdefault(epic_key, {})
+                    member = get_epic_member(counts, member_states, availability)
+                    counts[member] = counts.get(member, 0) + 1
+                elif config.auto_assign:
                     member = get_earliest_available_member(member_states, availability)
                 else:
                     member = UNASSIGNED

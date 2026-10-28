@@ -81,6 +81,7 @@ example.
 | `dependency_links`       | This is the list of Jira link types that work as dependencies. The default is `["Blocks"]`. A story that "is blocked by" another story starts after that story is finished. A type in this list must work like Blocks. Use `[]` to ignore Jira links. |
 | `use_backlog_order`      | `true` plans the stories in the order of the Jira backlog. This does not change the order of the epic rows; see `order_epics_by_rank`. |
 | `order_epics_by_rank`    | `true` shows the epic rows in the order of the Jira Rank of the epics, as in the Jira backlog. This includes epics that are only in the plan through a story. The default is `false`, which keeps the order of this file. This does not change the order in which stories are planned. |
+| `assign_by_epic`         | `true` gives a story without a team member to the auto-assign member with the most stories in its epic, so an epic stays with the same person where possible. A tie goes to the member who is free first. `false` gives it to the member who is free first. The default is `true`. |
 | `auto_assign`            | `false` gives no stories to team members that are not assigned to them in Jira. Such stories are planned one after another under "Unassigned", 8 hours a day. The default is `true`. |
 | `work_starts_at`         | This is the status where work on a story starts, for example `"In Progress"`. A done story's bar starts on the first change to this status, or to a status with more progress. |
 | `holidays`               | This is a list of days off for the whole team, for example `["2026-12-25", "2026-12-26"]`.                                                                                     |
@@ -100,7 +101,10 @@ How the planning works:
   `order_epics_by_rank = true`.
 - A story never starts before the stories in its `depends_on` list are finished. The same holds for stories that block it in Jira, with a link type from `dependency_links`. Both kinds of dependencies have an arrow in the chart. Links to stories that are not in the plan are ignored.
 - A story assigned in Jira to a team member goes to that member. Other stories go to the auto-assign
-  member who is free first. With `auto_assign = false`, they go to "Unassigned" instead.
+  member with the most stories in the same epic. Those are the stories assigned to them in Jira, done
+  or not, and the stories they got earlier in the plan. When no auto-assign member has a story in
+  the epic yet, or with `assign_by_epic = false`, the story goes to the auto-assign member who is
+  free first. With `auto_assign = false`, they go to "Unassigned" instead.
 - A story assigned in Jira to someone who is not in `[team]` keeps that assignee. That person is
   planned with 8 hours a day, Monday to Friday. They never get stories without an assignee. Add them
   to `[team]` to plan them with their real hours.
