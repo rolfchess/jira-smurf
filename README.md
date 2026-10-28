@@ -67,23 +67,23 @@ Search;Sprint 5;PROJ-20;Implement full-text search;8;In Progress;Alice
 
 The `gantt` command reads `gantt.toml`. See [`gantt.example.toml`](gantt.example.toml) for a full example.
 
-| Setting                  | Description                                                                                            |
-| ------------------------ | ------------------------------------------------------------------------------------------------------ |
-| `start_date`             | First day of the planning, `YYYY-MM-DD`.                                                               |
-| `default_hours`          | Hours for a story without story points.                                                                |
-| `velocity`               | Hours per story point.                                                                                 |
-| `include_open_sprints`   | `true` also adds all stories in the active sprint.                                                     |
-| `include_future_sprints` | `true` also adds all stories in future sprints.                                                        |
-| `use_backlog_order`      | `true` plans the stories in the order of the Jira backlog. The rows of the chart keep the order of this file. |
+| Setting                  | Description                                                                                                                                                                    |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `start_date`             | First day of the planning, `YYYY-MM-DD`.                                                                                                                                       |
+| `default_hours`          | Hours for a story without story points.                                                                                                                                        |
+| `velocity`               | Hours per story point.                                                                                                                                                         |
+| `include_open_sprints`   | `true` also adds all stories in the active sprint.                                                                                                                             |
+| `include_future_sprints` | `true` also adds all stories in future sprints.                                                                                                                                |
+| `use_backlog_order`      | `true` plans the stories in the order of the Jira backlog. The rows of the chart keep the order of this file.                                                                  |
 | `work_starts_at`         | This is the status where work on a story starts, for example `"In Progress"`. A done story's bar starts on the first change to this status, or to a status with more progress. |
-| `holidays`               | This is a list of days off for the whole team, for example `["2026-12-25", "2026-12-26"]`.            |
-| `[team."Name"]`          | Hours per weekday (`mon` to `fri`) for each team member. The name must match the display name in Jira. |
-| `auto_assign`            | Per team member. `false` means the member gets no unassigned stories. Such a member may have no hours. |
+| `holidays`               | This is a list of days off for the whole team, for example `["2026-12-25", "2026-12-26"]`.                                                                                     |
+| `[team."Name"]`          | Hours per weekday (`mon` to `fri`) for each team member. The name must match the display name in Jira.                                                                         |
+| `auto_assign`            | Per team member. `false` means the member gets no unassigned stories. Such a member may have no hours.                                                                         |
 | `days_off`               | This is set per team member. It is a list of days off, for example `["2026-12-10", "2026-12-18 to 2027-01-01"]`. A range includes both days. No work is planned on those days. |
-| `[statuses]`             | Progress in percent for each Jira status. A story at 100 is done.                                      |
-| `[status_colors]`        | This sets a row background color for each Jira status, for example `"Blocked" = "#ffcccc"`.      |
-| `[epics.KEY]`            | Plan all stories of this epic.                                                                         |
-| `[stories.KEY]`          | Plan this story. `depends_on = ["KEY"]` makes it start after the listed stories finish.                |
+| `[statuses]`             | Progress in percent for each Jira status. A story at 100 is done.                                                                                                              |
+| `[status_colors]`        | This sets a row background color for each Jira status, for example `"Blocked" = "#ffcccc"`.                                                                                    |
+| `[epics.KEY]`            | Plan all stories of this epic.                                                                                                                                                 |
+| `[stories.KEY]`          | Plan this story. `depends_on = ["KEY"]` makes it start after the listed stories finish.                                                                                        |
 
 How the planning works:
 
@@ -137,12 +137,8 @@ The result is less exact when the team changed during the period, because `gantt
 
 ## Notes
 
-- The tool works with team-managed projects (epic through `parent`) and company-managed projects (epic through `customfield_10014`).
+- Jira has two kinds of projects, and they link a story to its epic in different ways. In a team-managed project, the epic is the parent of the story, in the `parent` field. In a company-managed project, the epic is in the Epic Link field, `customfield_10014`. The tool reads both fields, so it finds the epic of a story in both kinds of project.
 - Stories without an epic are grouped under "(No Epic)".
-
-## License
-
-[MIT](LICENSE)
 
 ## Tip: share the chart from Google Drive
 
@@ -157,9 +153,12 @@ Google Drive does not show HTML files as web pages. A shared link to the chart s
    const FOLDER_ID = "PASTE_THE_FOLDER_ID_HERE";
 
    function doGet() {
-     const files = DriveApp.getFolderById(FOLDER_ID).getFilesByName("gantt-latest.html");
+     const files =
+       DriveApp.getFolderById(FOLDER_ID).getFilesByName("gantt-latest.html");
      if (!files.hasNext()) {
-       return HtmlService.createHtmlOutput("<p>gantt-latest.html was not found in the folder.</p>");
+       return HtmlService.createHtmlOutput(
+         "<p>gantt-latest.html was not found in the folder.</p>",
+       );
      }
      const html = files.next().getBlob().getDataAsString("UTF-8");
      return HtmlService.createHtmlOutput(html).setTitle("Gantt Chart");
@@ -172,3 +171,7 @@ Google Drive does not show HTML files as web pages. A shared link to the chart s
 The script reads the file on each visit, so the link always shows the latest chart. With **User accessing the web app**, a person can only see the chart if they can open the folder in Google Drive. The first time someone opens the link, Google asks them to allow the script to read their Drive.
 
 Do not use public HTML viewer websites for this. They need a public link to the file, and the chart contains your planning.
+
+## License
+
+[MIT](LICENSE)
