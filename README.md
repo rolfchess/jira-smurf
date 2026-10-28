@@ -99,6 +99,10 @@ How the planning works:
   stories. With `use_backlog_order = true`, they are planned in the order of the Jira backlog. The
   epic rows of the chart follow the order of the file, or the Jira Rank of the epics with
   `order_epics_by_rank = true`.
+- Before that order, the sprint counts: stories in the active sprint are planned first, then stories
+  in future sprints in the order the sprints start, then stories without an open sprint. So a story
+  without a sprint never takes the time of a team member before a sprint story. A story that a sprint
+  story waits for is planned with that sprint story.
 - A story never starts before the stories in its `depends_on` list are finished. The same holds for stories that block it in Jira, with a link type from `dependency_links`. Both kinds of dependencies have an arrow in the chart. Links to stories that are not in the plan are ignored.
 - A story assigned in Jira to a team member goes to that member. Other stories go to the auto-assign
   member with the most stories in the same epic. Those are the stories assigned to them in Jira, done

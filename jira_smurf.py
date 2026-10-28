@@ -148,6 +148,20 @@ def get_sprint(fields, done):
     return sprints[-1].get("name", "") if sprints else ""
 
 
+def sprint_rank(fields):
+    """Return a sort key that puts a story in the active sprint first, then stories in future sprints
+    in the order the sprints start, then stories without an open sprint."""
+    sprints = fields.get(SPRINT_FIELD)
+    open_sprints = [sprint for sprint in sprints if sprint.get("state") != "closed"] if isinstance(sprints, list) else []
+    if not open_sprints:
+        return (2, "", 0)
+    sprint = open_sprints[-1]
+    if sprint.get("state") == "active":
+        return (0, "", 0)
+    # A future sprint may have no start date yet; such sprints go after the ones that have one, by id
+    return (1, sprint.get("startDate") or "9999", sprint.get("id") or 0)
+
+
 def is_done_in_jira(fields):
     """Return True when the status of a story is in the Done category of Jira."""
     return (fields.get("status") or {}).get("statusCategory", {}).get("key") == "done"
@@ -774,6 +788,19 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
         key, title, epic, assignee, status, start, end
     """
     done_dates = done_dates or {}
+    # Stories of the active sprint come first, then those of future sprints, then the others. The order
+    # within each group stays the same. A story that a sprint story waits for gets the rank of that story,
+    # so it is planned in time for it.
+    ranks = {key: sprint_rank(story_data[key]["fields"]) if key in story_data else (2, "", 0) for key in ordered_keys}
+    changed = True
+    while changed:
+        changed = False
+        for key, deps in config.dependencies.items():
+            for dep in deps:
+                if key in ranks and dep in ranks and ranks[key] < ranks[dep]:
+                    ranks[dep] = ranks[key]
+                    changed = True
+    ordered_keys = sorted(ordered_keys, key=lambda key: ranks[key])
     # Topologically sort so dependencies are always scheduled before dependents
     ordered_keys = topological_sort(ordered_keys, config.dependencies)
 
