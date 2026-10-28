@@ -744,6 +744,7 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
             "issue_type_icon_url": (issue["fields"].get("issuetype") or {}).get("iconUrl", ""),
             "effort": 0 if progress >= 1.0 else hours,
             "total_hours": total_hours,
+            "estimated": sp is not None,
             "start": start_date.isoformat(),
             "end": (end_date + timedelta(days=1)).isoformat(),
         })
@@ -1172,6 +1173,11 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
         epic_end = max(s["end"] for s in epic_stories)
         epic_effort = sum(s.get("effort", 0) for s in epic_stories)
         effort_str = f"{epic_effort:.0f}h" if epic_effort == int(epic_effort) else f"{epic_effort:.1f}h"
+        # The total is partly a guess when an open story in the epic has no estimate
+        epic_unestimated = any(not st.get("estimated", True) and status_map.get(st["status"].lower(), 0) < 1.0
+                               for st in epic_stories)
+        if epic_unestimated:
+            effort_str += "?"
 
         # Weighted average progress (by total_hours so done stories count fully)
         total_weight = 0
@@ -1195,6 +1201,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             "type": "project",
             "open": True,
             "icon": ISSUE_TYPE_ICONS["epic"],
+            "unestimated": epic_unestimated,
             "icon_url": epic_icon_url,
             "story_key": epic_name_to_key.get(epic_name, ""),
             "progress": epic_progress,
@@ -1216,6 +1223,10 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
 
         effort = s.get("effort", 0)
         effort_str = f"{effort:.0f}h" if effort == int(effort) else f"{effort:.1f}h"
+        unestimated = not s.get("estimated", True) and progress < 1.0
+        if unestimated:
+            # The hours come from default_hours, because the story has no estimate in Jira
+            effort_str += "?"
 
         tasks.append({
             "id": task_id,
@@ -1232,6 +1243,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             "due_date": s.get("due", ""),
             "icon": issue_type_icon(s.get("issue_type", "")),
             "icon_url": s.get("issue_type_icon_url", ""),
+            "unestimated": unestimated,
             **(changes["stories"].get(s["key"], {}) if changes else {}),
         })
 
@@ -1465,6 +1477,11 @@ gantt.templates.tooltip_text = function(start, end, task) {{
   if (!task.text) return "";
   var fmt = gantt.date.date_to_str("%d %M %Y");
   var text = "<b>" + task.text + "</b><br/>" + fmt(start) + " – " + fmt(gantt.date.add(end, -1, "day"));
+  if (task.unestimated) {{
+    text += task.type === "project" || gantt.hasChild(task.id)
+      ? "<br/>Some stories have no estimate in Jira, so the default hours are used for them"
+      : "<br/>No estimate in Jira, so the default hours are used";
+  }}
   if (task.due_date) {{
     var due = gantt.date.str_to_date("%Y-%m-%d")(task.due_date);
     text += "<br/>Due: " + fmt(due) + (end > gantt.date.add(due, 1, "day") ? " (planned to end later)" : "");
