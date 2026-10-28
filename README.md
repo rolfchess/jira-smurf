@@ -175,6 +175,9 @@ The result is less exact when the team changed during the period, because `gantt
 team as it is now. All other work, such as meetings and bugs without points, counts in the hours. A
 story counts in full in the week it was finished.
 
+Read [Velocity: how fast does the team really work?](documentation/velocity.md) for how velocity
+works, and for what your team can do to keep it steady.
+
 ## Notes
 
 - Jira has two kinds of projects, and they link a story to its epic in different ways. In a
