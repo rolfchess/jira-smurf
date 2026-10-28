@@ -175,6 +175,7 @@ class GanttConfig:
     holidays: set  # {date, ...} — days off for the whole team
     status_colors: dict  # {lowercase_name: css_color}
     work_start_progress: float  # progress of the status where work on a story starts, 0 if not set
+    use_backlog_order: bool  # schedule stories in Jira backlog order instead of the order of the configuration file
 
 
 def parse_dates(setting, values, path):
@@ -310,8 +311,10 @@ def load_gantt_config(path="gantt.toml"):
 
     include_open_sprints = raw.get("include_open_sprints", False)
     include_future_sprints = raw.get("include_future_sprints", False)
+    use_backlog_order = raw.get("use_backlog_order", False)
     for name, val in (("include_open_sprints", include_open_sprints),
-                      ("include_future_sprints", include_future_sprints)):
+                      ("include_future_sprints", include_future_sprints),
+                      ("use_backlog_order", use_backlog_order)):
         if not isinstance(val, bool):
             print(f"Error: '{name}' must be true or false, got {val!r}", file=sys.stderr)
             sys.exit(1)
@@ -329,7 +332,8 @@ def load_gantt_config(path="gantt.toml"):
                        include_future_sprints=include_future_sprints,
                        holidays=holidays,
                        status_colors=status_colors,
-                       work_start_progress=work_start_progress)
+                       work_start_progress=work_start_progress,
+                       use_backlog_order=use_backlog_order)
 
 
 def fetch_stories_for_epic(epic_key):
@@ -401,6 +405,24 @@ def fetch_stories_by_keys(story_keys):
             print(f"Warning: story {key} not found in Jira, skipping", file=sys.stderr)
 
     return by_key
+
+
+def fetch_backlog_order(story_keys):
+    """Return {story key: position in the Jira backlog} for the given stories, based on the Rank field."""
+    jql = f"key in ({', '.join(story_keys)}) ORDER BY Rank ASC"
+    positions = {}
+    next_page_token = None
+    while True:
+        params = {"jql": jql, "fields": "summary", "maxResults": PAGE_SIZE}
+        if next_page_token:
+            params["nextPageToken"] = next_page_token
+        data = jira_get("search/jql", params=params)
+        for issue in data["issues"]:
+            positions[issue["key"]] = len(positions)
+        next_page_token = data.get("nextPageToken")
+        if not next_page_token:
+            break
+    return positions
 
 
 def fetch_sprint_stories(include_open, include_future):
@@ -1808,7 +1830,16 @@ def run_gantt(config_path, history_dir=None, since=None):
             print(f"  {missing} done {'story has' if missing == 1 else 'stories have'} no change to a done status "
                   f"in the history, so the plan start is used", file=sys.stderr)
 
-    scheduled = schedule_stories(config, story_data, ordered_keys, done_dates)
+    # The planner takes stories in this order; the chart rows keep the order of the configuration file
+    schedule_keys = ordered_keys
+    if config.use_backlog_order:
+        print("Fetching the backlog order...", file=sys.stderr)
+        positions = fetch_backlog_order(ordered_keys)
+        schedule_keys = sorted(ordered_keys, key=lambda key: positions.get(key, len(positions)))
+
+    scheduled = schedule_stories(config, story_data, schedule_keys, done_dates)
+    config_position = {key: i for i, key in enumerate(ordered_keys)}
+    scheduled.sort(key=lambda s: config_position[s["key"]])
     print(f"Scheduled {len(scheduled)} stories.", file=sys.stderr)
     changes = None
     snapshots = []

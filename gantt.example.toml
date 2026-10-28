@@ -7,6 +7,7 @@ velocity = 8.0                  # hours per story point
 include_open_sprints = false    # also add all stories in the active sprint
 include_future_sprints = false  # also add all stories in future sprints
 work_starts_at = "In Progress"  # a done story's bar starts at this status or a later one
+use_backlog_order = true        # plan stories in Jira backlog order, not in the order of this file
 
 # These are days off for the whole team, written as YYYY-MM-DD.
 holidays = [

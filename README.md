@@ -72,6 +72,7 @@ The `gantt` command reads `gantt.toml`. See [`gantt.example.toml`](gantt.example
 | `velocity`               | Hours per story point.                                                                                 |
 | `include_open_sprints`   | `true` also adds all stories in the active sprint.                                                     |
 | `include_future_sprints` | `true` also adds all stories in future sprints.                                                        |
+| `use_backlog_order`      | `true` plans the stories in the order of the Jira backlog. The rows of the chart keep the order of this file. |
 | `work_starts_at`         | This is the status where work on a story starts, for example `"In Progress"`. A done story's bar starts on the first change to this status, or to a status with more progress. |
 | `holidays`               | This is a list of days off for the whole team, for example `["2026-12-25", "2026-12-26"]`.            |
 | `[team."Name"]`          | Hours per weekday (`mon` to `fri`) for each team member. The name must match the display name in Jira. |
@@ -84,7 +85,8 @@ The `gantt` command reads `gantt.toml`. See [`gantt.example.toml`](gantt.example
 
 How the planning works:
 
-- Stories are planned in the order of the file: epics first, then single stories, then sprint stories.
+- Stories are planned in the order of the file: epics first, then single stories, then sprint stories. With `use_backlog_order = true`, they are planned in the order of the Jira backlog. The rows of the chart always follow the order of the file.
+- A story never starts before the stories in its `depends_on` list are finished.
 - A story assigned in Jira to a team member goes to that member. Other stories go to the auto-assign member who is free first.
 - Remaining work is the estimate times (1 minus the progress of the status).
 - Stories that are not done start on today's date at the earliest.
