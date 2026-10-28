@@ -1548,6 +1548,8 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   #toolbar button:hover {{ background: #e8e8e8; }}
   #toolbar button.active {{ background: #4e79a7; color: #fff; border-color: #4e79a7; }}
   #show-done-wrap {{ display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }}
+  #sprint-filter-wrap {{ display: flex; align-items: center; gap: 6px; font-size: 13px; }}
+  #sprint-filter {{ padding: 4px 6px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; background: #fff; }}
   #search-wrap {{ display: flex; align-items: center; gap: 6px; margin-left: auto; }}
   #search-input {{
     padding: 5px 10px; border: 1px solid #ccc; border-radius: 4px;
@@ -1632,6 +1634,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     <button onclick="zoomToFit()">Fit All</button>
   </div>
   <label id="show-done-wrap"><input type="checkbox" id="show-done" onchange="applyFilters()"> Show done stories</label>
+  <label id="sprint-filter-wrap">Sprint: <select id="sprint-filter" onchange="applyFilters()"></select></label>
   {changes_toggle}
   <div id="search-wrap">
     <input id="search-input" type="search" placeholder="Search stories, for example PROJ-123" oninput="onSearchInput()" onkeydown="if(event.key==='Escape'){{this.value='';onSearchInput();}}">
@@ -1785,24 +1788,35 @@ var hideDone = false;
 var UNASSIGNED = {unassigned_json};
 var selectedMembers = {{}};  // {{assignee: true}} for the team members whose stories are shown; empty shows all
 var selectedCount = 0;  // number of keys in selectedMembers
+var selectedSprint = null;  // sprint number whose stories are shown, "" for stories without a sprint, null for all
 var memberCounts = {{}};  // {{assignee: count element}} in the badges
 var epicDates = {{}};  // {{epicId: {{start_date, end_date}}}} with the dates from all stories
 var epicChanges = {{}};  // {{epicId: {{moved_days, base_start, base_end}}}} of all stories, from the baseline
 var epicHasShown = {{}};  // {{epicId: true}} for the epics with a story that passes the filters
-function isFiltering() {{
-  return hideDone || selectedCount > 0;
+// True while team members or a sprint are selected, so only part of the stories of an epic count
+function isNarrowed() {{
+  return selectedCount > 0 || selectedSprint !== null;
 }}
-function isMemberShown(task) {{
-  return selectedCount === 0 || !!selectedMembers[task.assignee];
+function isFiltering() {{
+  return hideDone || isNarrowed();
+}}
+function isSprintShown(task) {{
+  if (selectedSprint === null) return true;
+  // Snapshots have no sprints, so stories that left the plan are hidden while a sprint is selected
+  return !task.removed && (task.sprint || "") === selectedSprint;
+}}
+// True for a story of the selected team members and sprint, done or not
+function isPicked(task) {{
+  return (selectedCount === 0 || !!selectedMembers[task.assignee]) && isSprintShown(task);
 }}
 function isStoryShown(task) {{
-  return !(hideDone && task.progress >= 1) && isMemberShown(task);
+  return !(hideDone && task.progress >= 1) && isPicked(task);
 }}
 function isTaskShown(task) {{
   if (task.removed && !showChanges) return false;
   if (!isFiltering()) return true;
-  // An epic without stories has no team member
-  if (task.roadmap) return selectedCount === 0;
+  // An epic without stories has no team member or sprint
+  if (task.roadmap) return !isNarrowed();
   // An epic, or the group of stories that are no longer in the plan
   if (task.parent === gantt.config.root_id) return !!epicHasShown[task.id];
   return isStoryShown(task);
@@ -1827,12 +1841,12 @@ function formatPoints(points) {{
 }}
 // Dates, remaining hours, points and progress of the stories of an epic, in one pass.
 // The dates are of the stories that pass the filters, or null when none does. The totals count the
-// stories of the selected team members, done or not, so showing done stories does not change them.
+// stories of the selected team members and sprint, done or not, so showing done stories does not change them.
 // A done story has no remaining hours. The progress is weighted by the estimate of each story.
 function epicSummary(epicId) {{
   var start = null, end = null, hours = 0, points = null, guess = false, weight = 0, done = 0;
   gantt.eachTask(function(child) {{
-    if (!isMemberShown(child)) return;
+    if (!isPicked(child)) return;
     hours += child.hours || 0;
     if (child.points_value != null) points = (points || 0) + child.points_value;
     if (child.unestimated) guess = true;
@@ -1851,11 +1865,11 @@ function epicSummary(epicId) {{
     unestimated: guess,
   }};
 }}
-// Show in each badge the number of stories of that member that pass the done filter.
+// Show in each badge the number of stories of that member that pass the done and sprint filters.
 function updateMemberCounts() {{
   var counts = {{}};
   gantt.eachTask(function(task) {{
-    if (!task.assignee || (hideDone && task.progress >= 1)) return;
+    if (!task.assignee || (hideDone && task.progress >= 1) || !isSprintShown(task)) return;
     counts[task.assignee] = (counts[task.assignee] || 0) + 1;
   }});
   Object.keys(memberCounts).forEach(function(name) {{
@@ -1905,8 +1919,35 @@ function buildMemberFilter() {{
   }};
   bar.appendChild(clear);
 }}
+// One option per sprint number of the stories, lowest first, and "No sprint" last when a story has none.
+// The values start with "s:", so a sprint cannot be mistaken for "all" or "none".
+function buildSprintFilter() {{
+  var seen = {{}}, noSprint = false;
+  gantt.eachTask(function(task) {{
+    if (task.removed || task.is_epic) return;
+    if (task.sprint) seen[task.sprint] = true; else noSprint = true;
+  }});
+  var sprints = Object.keys(seen).sort(function(a, b) {{
+    var x = Number(a), y = Number(b);
+    if (!isNaN(x) && !isNaN(y)) return x - y;
+    if (isNaN(x) !== isNaN(y)) return isNaN(x) ? 1 : -1;
+    return a.localeCompare(b);
+  }});
+  var select = document.getElementById("sprint-filter");
+  function add(value, label) {{
+    var option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    select.appendChild(option);
+  }}
+  add("all", "All sprints");
+  sprints.forEach(function(sprint) {{ add("s:" + sprint, sprint); }});
+  if (noSprint) add("none", "No sprint");
+}}
 function applyFilters() {{
   hideDone = !document.getElementById("show-done").checked;
+  var sprint = document.getElementById("sprint-filter").value;
+  selectedSprint = sprint === "all" ? null : sprint === "none" ? "" : sprint.slice(2);
   document.getElementById("member-clear").style.display = selectedCount ? "" : "none";
   gantt.eachTask(function(task) {{
     if (task.parent !== gantt.config.root_id || task.roadmap) return;
@@ -1921,13 +1962,13 @@ function applyFilters() {{
     task.type = dates ? "task" : "project";
     task.start_date = (dates || epicDates[task.id]).start_date;
     task.end_date = (dates || epicDates[task.id]).end_date;
-    // The totals of the epic row count only the stories of the selected team members
+    // The totals of the epic row count only the stories of the selected team members and sprint
     task.effort = summary.effort;
     task.points = summary.points;
     task.progress = summary.progress;
     task.unestimated = summary.unestimated;
-    // The baseline of an epic is of all its stories, so it is left out while team members are selected
-    var changes = selectedCount ? {{}} : epicChanges[task.id];
+    // The baseline of an epic is of all its stories, so it is left out while only part of them count
+    var changes = isNarrowed() ? {{}} : epicChanges[task.id];
     task.moved_days = changes.moved_days;
     task.base_start = changes.base_start;
     task.base_end = changes.base_end;
@@ -2155,6 +2196,7 @@ gantt.addMarker({{ start_date: new Date(), css: "today-marker", text: "Today" }}
 }})();
 gantt.parse({{ data: {tasks_json}, links: {links_json} }});
 buildMemberFilter();
+buildSprintFilter();
 applyFilters();
 (function() {{
   var svg = document.getElementById("trend-svg");

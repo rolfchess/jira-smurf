@@ -127,7 +127,10 @@ of the stories of those members, done or not, and the baseline of the epics is h
 the plan" shows only the stories of those members. Snapshots made before this version have no
 assignees, so their removed stories are hidden while members are selected. The Points and Sprint columns show the story points and the last sprint of
 each story. For a sprint name that ends in "Sprint" and a number, such as "DTIC Sprint 26", only the
-number is shown. Click a bar to open the story in Jira. The buttons in the Story column header collapse or
+number is shown. The Sprint list in the toolbar shows only the stories of one sprint, and only the
+epics that have stories in it. It works together with the team member badges, and the epic rows then
+count only the stories of that sprint. "No longer in the plan" is hidden while a sprint is selected,
+because snapshots have no sprints. Click a bar to open the story in Jira. The buttons in the Story column header collapse or
 expand all epics. Each title in the Story column starts with the icon of its Jira issue type. The
 run downloads these icons from Jira and puts them in the page, so the page shows them without a Jira
 login. If an icon cannot be downloaded, the page shows an emoji instead: 📖 epic, 🔖 story, 🐛 bug,
