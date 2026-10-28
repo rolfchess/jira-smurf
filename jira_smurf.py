@@ -142,11 +142,14 @@ def get_sprint(fields):
     return ""
 
 
+UNASSIGNED = "Unassigned"  # the assignee of stories without one, and their planning lane without auto-assign
+
+
 def get_assignee(fields):
     assignee = fields.get("assignee")
     if assignee:
         return assignee.get("displayName", "")
-    return "Unassigned"
+    return UNASSIGNED
 
 
 def get_story_points_numeric(fields):
@@ -257,9 +260,14 @@ def load_gantt_config(path="gantt.toml"):
             sys.exit(1)
         days_off = parse_dates(f"'days_off' for team member '{name}'", avail.get("days_off", []), path)
         avail["days_off"] = days_off | holidays
-        if auto_assign and not has_working_hours(avail):
+        if name == UNASSIGNED:
+            print(f"Error: '{UNASSIGNED}' cannot be a team member in {path}, the chart uses it for stories "
+                  f"without an assignee", file=sys.stderr)
+            sys.exit(1)
+        # Only a member who gets unassigned stories needs hours
+        if auto_assign_team and auto_assign and not has_working_hours(avail):
             print(f"Error: team member '{name}' has no working hours configured. "
-                  f"Add hours or set auto_assign = false", file=sys.stderr)
+                  f"Add hours or set auto_assign = false for this member", file=sys.stderr)
             sys.exit(1)
     if auto_assign_team and not any(avail.get("auto_assign", True) for avail in team.values()):
         print(f"Error: no team member in {path} has auto_assign enabled", file=sys.stderr)
@@ -756,7 +764,7 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
     # Without auto-assign, stories without a team member are planned one after another
     # under "Unassigned", on a standard week
     if not config.auto_assign:
-        availability["Unassigned"] = outside_hours
+        availability[UNASSIGNED] = outside_hours
 
     # member_states tracks the next available date per member
     member_states = {}
@@ -798,7 +806,7 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
         else:
             if assignee_name in member_states:
                 member = assignee_name
-            elif assignee_name != "Unassigned" and assignee_name not in config.team:
+            elif assignee_name != UNASSIGNED and assignee_name not in config.team:
                 print(f"Warning: assignee '{assignee_name}' is not in [team], so their stories are planned "
                       f"with 8 hours a day, Monday to Friday. Add them to [team] for their real hours.",
                       file=sys.stderr)
@@ -806,13 +814,13 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
                 member_states[assignee_name] = next_working_day(config.start_date, outside_hours)
                 member = assignee_name
             else:
-                action = "auto-assigning" if config.auto_assign else "planning under 'Unassigned'"
+                action = "auto-assigning" if config.auto_assign else f"planning under '{UNASSIGNED}'"
                 if assignee_name in config.team:
                     print(f"Warning: assignee '{assignee_name}' for {story_key} has no working hours, {action}", file=sys.stderr)
                 if config.auto_assign:
                     member = get_earliest_available_member(member_states, availability)
                 else:
-                    member = "Unassigned"
+                    member = UNASSIGNED
             avail = availability[member]
             cursor = member_states[member]
 
@@ -1057,13 +1065,19 @@ def format_hours(hours):
 
 
 def format_points(points):
-    """Return story points as "5" or "0.5", or "" for a story without points."""
-    return "" if points is None else f"{points:g}"
+    """Return story points as "5" or "0.33", or "" for a story without points.
+
+    The chart page rounds the points of an epic row the same way.
+    """
+    return "" if points is None else f"{round(points, 2):g}"
 
 
 def sprint_number(sprint):
-    """Return the number at the end of a sprint name, such as "26" for "DTIC Sprint 26", or the whole name."""
-    match = re.search(r"(\d+)\s*$", sprint)
+    """Return the number after "Sprint" at the end of a sprint name, such as "26" for "DTIC Sprint 26".
+
+    Other names, such as "Team 2026-W40", are returned whole, so a year or week is not shown as a sprint number.
+    """
+    match = re.search(r"\bsprint\s*(\d+)\s*$", sprint, re.IGNORECASE)
     return match.group(1) if match else sprint
 
 
@@ -1366,14 +1380,12 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             total_weight += weight
         epic_progress = weighted_progress / total_weight if total_weight > 0 else 0
 
-        epic_points = sum(s.get("points") or 0 for s in epic_stories)
-
+        # The page sets the points and remaining hours of the epic row from the stories that are shown
         tasks.append({
             "id": task_id,
             "text": epic_name,
             "start_date": epic_start,
             "end_date": epic_end,
-            "points": format_points(epic_points) if epic_points else "",
             "effort": effort_str,
             "status": "",
             "color": epic_color_map[epic_name],
@@ -1495,6 +1507,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     links_json = json.dumps(links, indent=2)
     holidays_json = json.dumps(sorted(d.isoformat() for d in holidays))
     show_changes_json = "true" if changes else "false"
+    unassigned_json = json.dumps(UNASSIGNED)
     icon_images_json = json.dumps(icon_images or {})
     if changes:
         since = changes["since"]
@@ -1774,51 +1787,61 @@ function setZoom(level) {{
   }});
 }}
 var hideDone = false;
+var UNASSIGNED = {unassigned_json};
 var selectedMembers = {{}};  // {{assignee: true}} for the team members whose stories are shown; empty shows all
+var selectedCount = 0;  // number of keys in selectedMembers
 var memberCounts = {{}};  // {{assignee: count element}} in the badges
 var epicDates = {{}};  // {{epicId: {{start_date, end_date}}}} with the dates from all stories
-var epicTotals = {{}};  // {{epicId: {{effort, points}}}} with the totals of all stories
+var epicChanges = {{}};  // {{epicId: {{moved_days, base_start, base_end}}}} of all stories, from the baseline
+var epicHasShown = {{}};  // {{epicId: true}} for the epics with a story that passes the filters
 function isFiltering() {{
-  return hideDone || Object.keys(selectedMembers).length > 0;
+  return hideDone || selectedCount > 0;
+}}
+function isMemberShown(task) {{
+  return selectedCount === 0 || !!selectedMembers[task.assignee];
 }}
 function isStoryShown(task) {{
-  if (hideDone && task.progress >= 1) return false;
-  return Object.keys(selectedMembers).length === 0 || !!selectedMembers[task.assignee];
+  return !(hideDone && task.progress >= 1) && isMemberShown(task);
 }}
 function isTaskShown(task) {{
-  if (task.removed) return showChanges;
+  // Stories that left the plan have no assignee, so they are hidden while team members are selected
+  if (task.removed) return showChanges && selectedCount === 0;
   if (!isFiltering()) return true;
   // An epic without stories has no team member
-  if (task.roadmap) return Object.keys(selectedMembers).length === 0;
-  if (gantt.hasChild(task.id)) return !!shownStoryDates(task.id);
+  if (task.roadmap) return selectedCount === 0;
+  if (task.is_epic) return !!epicHasShown[task.id];
   return isStoryShown(task);
-}}
-// Earliest start and latest end of the stories of an epic that pass the filters, or null.
-function shownStoryDates(epicId) {{
-  var start = null, end = null;
-  gantt.eachTask(function(child) {{
-    if (!isStoryShown(child)) return;
-    if (!start || child.start_date < start) start = child.start_date;
-    if (!end || child.end_date > end) end = child.end_date;
-  }}, epicId);
-  return start ? {{ start_date: start, end_date: end }} : null;
 }}
 gantt.attachEvent("onBeforeTaskDisplay", function(id, task) {{
   return isTaskShown(task);
 }});
-// Remaining hours and points of the stories of an epic that pass the filters.
-// The hours get a "?" when one of those stories has no estimate.
-function shownStoryTotals(epicId) {{
-  var hours = 0, points = 0, guess = false;
+function formatHours(hours) {{
+  return Math.round(hours * 10) / 10 + "h";
+}}
+// Rounded as format_points does in Python
+function formatPoints(points) {{
+  return points ? String(Math.round(points * 100) / 100) : "";
+}}
+// Dates, remaining hours and points of the stories of an epic, in one pass.
+// The dates are of the stories that pass the filters, or null when none does. The hours and points
+// count the stories of the selected team members, done or not, so showing done stories does not change
+// them. A done story has no remaining hours.
+function epicSummary(epicId) {{
+  var start = null, end = null, hours = 0, points = 0, guess = false;
   gantt.eachTask(function(child) {{
-    if (!isStoryShown(child)) return;
+    if (!isMemberShown(child)) return;
     hours += child.hours || 0;
     points += child.points_value || 0;
     if (child.unestimated) guess = true;
+    if (!isStoryShown(child)) return;
+    if (!start || child.start_date < start) start = child.start_date;
+    if (!end || child.end_date > end) end = child.end_date;
   }}, epicId);
   return {{
-    effort: Math.round(hours * 10) / 10 + "h" + (guess ? "?" : ""),
-    points: points ? String(Math.round(points * 100) / 100) : "",
+    dates: start ? {{ start_date: start, end_date: end }} : null,
+    effort: formatHours(hours) + (guess ? "?" : ""),
+    points: formatPoints(points),
+    unestimated: guess,
   }};
 }}
 // Show in each badge the number of stories of that member that pass the done filter.
@@ -1832,14 +1855,15 @@ function updateMemberCounts() {{
     memberCounts[name].textContent = counts[name] || 0;
   }});
 }}
-// One badge per assignee of the stories, "Unassigned" last. A click selects or deselects that member.
+// One badge per assignee of the stories, UNASSIGNED last. A click selects or deselects that member.
+// updateMemberCounts fills in the counts.
 function buildMemberFilter() {{
-  var counts = {{}};
+  var seen = {{}};
   gantt.eachTask(function(task) {{
-    if (task.assignee) counts[task.assignee] = (counts[task.assignee] || 0) + 1;
+    if (task.assignee) seen[task.assignee] = true;
   }});
-  var names = Object.keys(counts).sort(function(a, b) {{
-    if (a === "Unassigned" || b === "Unassigned") return a === "Unassigned" ? 1 : -1;
+  var names = Object.keys(seen).sort(function(a, b) {{
+    if (a === UNASSIGNED || b === UNASSIGNED) return a === UNASSIGNED ? 1 : -1;
     return a.localeCompare(b);
   }});
   var bar = document.getElementById("member-filter");
@@ -1856,7 +1880,8 @@ function buildMemberFilter() {{
     memberCounts[name] = count;
     badge.appendChild(count);
     badge.onclick = function() {{
-      if (selectedMembers[name]) delete selectedMembers[name]; else selectedMembers[name] = true;
+      if (selectedMembers[name]) {{ delete selectedMembers[name]; selectedCount--; }}
+      else {{ selectedMembers[name] = true; selectedCount++; }}
       badge.classList.toggle("active", !!selectedMembers[name]);
       applyFilters();
     }};
@@ -1867,6 +1892,7 @@ function buildMemberFilter() {{
   clear.textContent = "Show all";
   clear.onclick = function() {{
     selectedMembers = {{}};
+    selectedCount = 0;
     bar.querySelectorAll(".member-badge").forEach(function(b) {{ b.classList.remove("active"); }});
     applyFilters();
   }};
@@ -1874,20 +1900,29 @@ function buildMemberFilter() {{
 }}
 function applyFilters() {{
   hideDone = !document.getElementById("show-done").checked;
-  document.getElementById("member-clear").style.display = Object.keys(selectedMembers).length ? "" : "none";
+  document.getElementById("member-clear").style.display = selectedCount ? "" : "none";
   gantt.eachTask(function(task) {{
     if (task.parent !== gantt.config.root_id || task.removed || task.roadmap) return;
     if (!epicDates[task.id]) epicDates[task.id] = {{ start_date: task.start_date, end_date: task.end_date }};
-    var dates = isFiltering() ? shownStoryDates(task.id) : null;
+    if (!epicChanges[task.id]) {{
+      epicChanges[task.id] = {{ moved_days: task.moved_days, base_start: task.base_start, base_end: task.base_end }};
+    }}
+    var summary = epicSummary(task.id);
+    epicHasShown[task.id] = !!summary.dates;
+    var dates = isFiltering() ? summary.dates : null;
     // A "project" task takes its dates from all its children, so use a plain task while stories are hidden.
     task.type = dates ? "task" : "project";
     task.start_date = (dates || epicDates[task.id]).start_date;
     task.end_date = (dates || epicDates[task.id]).end_date;
-    // The totals of the epic row count only the stories that are shown
-    if (!epicTotals[task.id]) epicTotals[task.id] = {{ effort: task.effort, points: task.points }};
-    var totals = isFiltering() ? shownStoryTotals(task.id) : epicTotals[task.id];
-    task.effort = totals.effort;
-    task.points = totals.points;
+    // The totals of the epic row count only the stories of the selected team members
+    task.effort = summary.effort;
+    task.points = summary.points;
+    task.unestimated = summary.unestimated;
+    // The baseline of an epic is of all its stories, so it is left out while team members are selected
+    var changes = selectedCount ? {{}} : epicChanges[task.id];
+    task.moved_days = changes.moved_days;
+    task.base_start = changes.base_start;
+    task.base_end = changes.base_end;
   }});
   updateMemberCounts();
   zoomToFit();

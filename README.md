@@ -83,7 +83,7 @@ example.
 | `auto_assign`            | `false` gives no stories to team members that are not assigned to them in Jira. Such stories are planned one after another under "Unassigned", 8 hours a day. The default is `true`. |
 | `work_starts_at`         | This is the status where work on a story starts, for example `"In Progress"`. A done story's bar starts on the first change to this status, or to a status with more progress. |
 | `holidays`               | This is a list of days off for the whole team, for example `["2026-12-25", "2026-12-26"]`.                                                                                     |
-| `[team."Name"]`          | Hours per weekday (`mon` to `fri`) for each team member. The name must match the display name in Jira.                                                                         |
+| `[team."Name"]`          | Hours per weekday (`mon` to `fri`) for each team member. The name must match the display name in Jira. "Unassigned" cannot be used as a name.                                                                         |
 | `auto_assign`            | Per team member. `false` means the member gets no unassigned stories. Such a member may have no hours. This has no effect when the top-level `auto_assign` is `false`.                                                                       |
 | `days_off`               | This is set per team member. It is a list of days off, for example `["2026-12-10", "2026-12-18 to 2027-01-01"]`. A range includes both days. No work is planned on those days. |
 | `[statuses]`             | Progress in percent for each Jira status. A story at 100 is done.                                                                                                              |
@@ -121,8 +121,10 @@ How the planning works:
 In the chart you can zoom, search for a story and show or hide done stories. Done stories are hidden
 at first. Click a team member badge above the table to show only the stories of that member. You can
 select more than one member, and "Unassigned". The epic rows then show the points and remaining hours
-of the stories that are shown. The Points and Sprint columns show the story points and the number of
-the last sprint of each story. Click a bar to open the story in Jira. The buttons in the Story column header collapse or
+of the stories of those members, done or not, and the "No longer in the plan" group and the baseline
+of the epics are hidden. The Points and Sprint columns show the story points and the last sprint of
+each story. For a sprint name that ends in "Sprint" and a number, such as "DTIC Sprint 26", only the
+number is shown. Click a bar to open the story in Jira. The buttons in the Story column header collapse or
 expand all epics. Each title in the Story column starts with the icon of its Jira issue type. The
 run downloads these icons from Jira and puts them in the page, so the page shows them without a Jira
 login. If an icon cannot be downloaded, the page shows an emoji instead: 📖 epic, 🔖 story, 🐛 bug,
