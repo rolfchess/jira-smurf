@@ -128,3 +128,32 @@ With two or more snapshots, a trend chart shows the planned end of each epic at 
 ## License
 
 [MIT](LICENSE)
+
+## Tip: share the chart from Google Drive
+
+Google Drive does not show HTML files as web pages. A shared link to the chart shows its source as text. To share the chart as a web page, serve it with a small Google Apps Script web app:
+
+1. Copy the chart to a Google Drive folder under a fixed name, for example `gantt-latest.html`. Replace that file after each run.
+2. Open the folder in Google Drive in your browser. The folder ID is the last part of the address, after `/folders/`.
+3. Go to [script.google.com](https://script.google.com), create a new project and paste this script. Fill in the folder ID.
+
+   ```javascript
+   // Serves gantt-latest.html from a Google Drive folder as a web page.
+   const FOLDER_ID = "PASTE_THE_FOLDER_ID_HERE";
+
+   function doGet() {
+     const files = DriveApp.getFolderById(FOLDER_ID).getFilesByName("gantt-latest.html");
+     if (!files.hasNext()) {
+       return HtmlService.createHtmlOutput("<p>gantt-latest.html was not found in the folder.</p>");
+     }
+     const html = files.next().getBlob().getDataAsString("UTF-8");
+     return HtmlService.createHtmlOutput(html).setTitle("Gantt Chart");
+   }
+   ```
+
+4. Choose **Deploy → New deployment → Web app**. Set **Execute as** to **User accessing the web app**. Set **Who has access** to the people who may see the chart, for example everyone in your organization.
+5. Share the web app link.
+
+The script reads the file on each visit, so the link always shows the latest chart. With **User accessing the web app**, a person can only see the chart if they can open the folder in Google Drive. The first time someone opens the link, Google asks them to allow the script to read their Drive.
+
+Do not use public HTML viewer websites for this. They need a public link to the file, and the chart contains your planning.
