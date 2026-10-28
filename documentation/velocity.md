@@ -6,10 +6,10 @@ than we thought. I wanted to see where the time went, so I wrote this tool.
 To be able to tell when the project (or an epic) will be done, we need to know how fast the team
 moves through the work, and we need an estimate of all the work. The estimates are the points on a
 story and they don't need to be exact. You can do T-shirt sizing (Large Medium Small) or do the
-classic Fibonacci sequence 1, 3, 5, 8 points etc. Don't spend too long on estimating, because
-stories need to be small, and many small stories average out the errors.
+classic Fibonacci sequence 1, 2, 3, 5, 8 points etcetera. Don't spend too long on estimating,
+because stories need to be small, and many small stories average out the errors.
 
-The speed of the team is called "Velocity" in scrum and is typically expressed as Points per Hour,
+The speed of the team is called "Velocity" in scrum and is typically expressed as Points per Sprint,
 but since most teams spend more hours per point, this tool calculates Velocity as "Hours per Point".
 So a Velocity of 8 in this tool means 1 point takes 8 hours to complete.
 
@@ -19,7 +19,7 @@ To calculate the number of hours a story will take to complete, this tool:
 
 1. Uses the points in the story
 2. Multiplies that with the Velocity in the config file
-3. Assigns those hours to the next availabe resource.
+3. Assigns those hours to the next available resource.
 
 If a story has no points, the tool uses the `default_hours` setting from the config as the number of
 expected hours in the story.
@@ -31,9 +31,9 @@ will be doing the coming weeks/months, and when stuff will be done.
 ## But the Velocity is configuration, how do I know the actual velocity?
 
 This tool can measure the actual Velocity of a project based on the story points of stories that
-have moved to "Done", and determining the number of available hours of the team during that period.
-It does this over a period of 8 weeks (if available), give you the velocity per week, and the
-overall velocity over 8 weeks:
+have moved to "Done", and on the number of available hours of the team during that period. It does
+this over a period of 8 weeks (if available), gives you the velocity per week, and the overall
+velocity over 8 weeks:
 
 Run this:
 
@@ -41,8 +41,8 @@ Run this:
 python jira_smurf.py velocity
 ```
 
-The output could look somewhat like this for a team of three people which are available 8 hours a
-day, 5 days a week. That is 3 × 8 × 5 = 120 hours.
+The output could look somewhat like this for a team of three people who are available 8 hours a day,
+5 days a week. That is 3 × 8 × 5 = 120 hours.
 
 | Week   | Hours | Points done | Hours per point |
 | ------ | ----- | ----------- | --------------- |
@@ -66,11 +66,11 @@ administration more cumbersome and drains the energy of people who would rather 
 Instead, we can configure availability of people in the `[team]` section of the configuration. The
 tool assumes that people are there on those days. Sick days, a dentist visit or an evening of extra
 work make the real hours different. That error is accepted as a fact of life, and will be reflected
-in the calulated average velocity.
+in the calculated average velocity.
 
 It is tempting to make room for meetings by lowering the available hours of team members. For
 example, you could set 6 hours on Monday and Friday instead of 8. **Don't do that**. It will pollute
-the velocity calculation because you are trying hide stuff under the carpet.
+the velocity calculation because you are trying to hide stuff under the carpet.
 
 - **Hours:** how many hours each person is available for the project. Change them only when the
   availability changes, for example for a person who works 4 days a week.
@@ -80,7 +80,7 @@ the velocity calculation because you are trying hide stuff under the carpet.
 The tool measures the past weeks with the hours in `gantt.toml` as they are now. So when you fix the
 hours, run `python jira_smurf.py velocity` again and use the new velocity. Try to find the slowest
 moving average velocity (so the longest period you can use) and use that as configuration. Don't
-change it too often or too redical, it will make your planning unpredictable for everyone.
+change it too often or too radically, it will make your planning unpredictable for everyone.
 
 ### Done means released
 
@@ -90,7 +90,7 @@ work left on it.
 
 Do not move a story to Done when the code is merged or tested, but not yet released. There is still
 work left, and the customer has nothing yet. The velocity then might look better than it is, and
-**the plan promises dates that are too early**. That is unfair to the the customer and the team.
+**the plan promises dates that are too early**. That is unfair to the customer and the team.
 
 This only works when the team releases often, ideally every story as soon as it is ready. You will
 need to be able to do that anyway: A team that releases once every five weeks cannot fix a zero-day
