@@ -375,8 +375,11 @@ def fetch_stories_for_epic(epic_key):
     return []
 
 
-def fetch_stories_by_keys(story_keys):
-    """Fetch specific stories by their Jira keys."""
+def fetch_stories_by_keys(story_keys, warn_missing=True):
+    """Fetch specific stories by their Jira keys.
+
+    With warn_missing, print a warning for each key that Jira does not return.
+    """
     keys_str = ", ".join(story_keys)
     jql = f"key in ({keys_str})"
     fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10028,duedate,issuetype"
@@ -401,7 +404,7 @@ def fetch_stories_by_keys(story_keys):
     by_key = {issue["key"]: issue for issue in issues}
 
     # Warn about missing stories
-    for key in story_keys:
+    for key in story_keys if warn_missing else ():
         if key not in by_key:
             print(f"Warning: story {key} not found in Jira, skipping", file=sys.stderr)
 
@@ -1954,8 +1957,10 @@ def run_gantt(config_path, history_dir=None, since=None):
     if changes:
         untyped = [r for r in changes["removed"] if not r.get("issue_type_icon_url")]
         if untyped:
-            found = fetch_stories_by_keys([r["key"] for r in untyped])
+            found = fetch_stories_by_keys([r["key"] for r in untyped], warn_missing=False)
             for r in untyped:
+                if r["key"] not in found:
+                    print(f"Warning: story {r['key']} is no longer in Jira, so it has no type icon", file=sys.stderr)
                 issue_type = (found.get(r["key"], {}).get("fields", {}).get("issuetype")) or {}
                 r["issue_type"] = issue_type.get("name", "")
                 r["issue_type_icon_url"] = issue_type.get("iconUrl", "")
