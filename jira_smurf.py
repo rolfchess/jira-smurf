@@ -871,15 +871,9 @@ def compare_plans(baseline, current, holidays, today):
     return {"since": baseline["date"], "stories": stories, "epics": epics, "removed": removed, "summary": summary}
 
 
-def format_day(iso_day):
-    """Return a YYYY-MM-DD string as "3 Dec 2026"."""
-    d = date.fromisoformat(iso_day)
-    return f"{d.day} {d.strftime('%b %Y')}"
-
-
 def format_last_day(iso_end):
-    """Return the last planned day for an end date that is the day after it, as "3 Dec 2026"."""
-    return format_day((date.fromisoformat(iso_end) - timedelta(days=1)).isoformat())
+    """Return the last planned day for an end date that is the day after it, as YYYY-MM-DD."""
+    return (date.fromisoformat(iso_end) - timedelta(days=1)).isoformat()
 
 
 def format_hours(hours):
@@ -920,7 +914,7 @@ def changes_summary_html(changes):
     else:
         end_line = ""
     return f"""<div id="changes-summary">
-<h3>Changes since {format_day(changes['since'])}</h3>
+<h3>Changes since {changes['since']}</h3>
 {end_line}
 <p>Remaining work went from {format_hours(s['base_remaining'])} to {format_hours(s['remaining'])}.</p>
 <ul>
@@ -934,8 +928,11 @@ def changes_summary_html(changes):
 </div>"""
 
 
-def trend_html(snapshots, epic_color_map, holidays):
+def trend_html(snapshots, epic_color_map, holidays, compare_date=None):
     """Return the HTML of a milestone trend chart: the planned end of each epic at each run.
+
+    The table below the chart compares the latest run with the run of compare_date, or with
+    the oldest run if compare_date is None.
 
     The x axis is the run date and the y axis the planned end date. A flat line means the
     end date did not move. Only epics in epic_color_map are drawn, in their epic color.
@@ -981,7 +978,7 @@ def trend_html(snapshots, epic_color_map, holidays):
         if d >= y_min:
             parts.append(f'<line class="grid" x1="{left}" x2="{left + plot_w}" y1="{y(d):.1f}" y2="{y(d):.1f}"/>')
             parts.append(f'<text class="axis" x="{left - 8}" y="{y(d) + 4:.1f}" text-anchor="end">'
-                         f'{d.strftime("%b %Y")}</text>')
+                         f'{d.strftime("%Y-%m")}</text>')
         d = date(d.year + (d.month == 12), d.month % 12 + 1, 1)
 
     # X labels at the first day of each month
@@ -990,7 +987,7 @@ def trend_html(snapshots, epic_color_map, holidays):
         if d >= x_min:
             parts.append(f'<line class="grid" x1="{x(d):.1f}" x2="{x(d):.1f}" y1="{top}" y2="{top + plot_h}"/>')
             parts.append(f'<text class="axis" x="{x(d):.1f}" y="{top + plot_h + 18}" text-anchor="middle">'
-                         f'{d.strftime("%b %Y")}</text>')
+                         f'{d.strftime("%Y-%m")}</text>')
         d = date(d.year + (d.month == 12), d.month % 12 + 1, 1)
     parts.append(f'<text class="axis" x="{left + plot_w / 2:.0f}" y="{height - 6}" text-anchor="middle">Run date</text>')
 
@@ -1006,8 +1003,7 @@ def trend_html(snapshots, epic_color_map, holidays):
         parts.append(f'<polyline points="{coords}" stroke="{color}"><title>{label}</title></polyline>')
         for r, e in points:
             parts.append(f'<circle cx="{x(r):.1f}" cy="{y(e):.1f}" r="4" fill="{color}">'
-                         f'<title>{label}\nRun {r.day} {r.strftime("%b %Y")}: '
-                         f'planned end {e.day} {e.strftime("%b %Y")}</title></circle>')
+                         f'<title>{label}\nRun {r}: planned end {e}</title></circle>')
         parts.append('</g>')
 
     for epic, points in series.items():
@@ -1022,15 +1018,20 @@ def trend_html(snapshots, epic_color_map, holidays):
         if epic in series or epic == "Whole plan"
     )
 
+    compare_run = date.fromisoformat(compare_date) if compare_date else runs[0]
     rows = []
     for name, points in list(series.items()) + [("Whole plan", whole_plan)]:
-        first, last = points[0][1], points[-1][1]
-        moved = working_days_between(first + timedelta(days=1), last + timedelta(days=1), holidays)
-        rows.append(f"<tr><td>{html.escape(name)}</td>"
-                    f"<td>{first.day} {first.strftime('%b %Y')} ({points[0][0].day} {points[0][0].strftime('%b')})</td>"
-                    f"<td>{last.day} {last.strftime('%b %Y')}</td>"
-                    f"<td>{format_signed(moved, ' working days') if moved else 'no change'}</td></tr>")
-    table = ("<details><summary>Show as table</summary><table><tr><th>Epic</th><th>First planned end (run)</th>"
+        then, last = dict(points).get(compare_run), points[-1][1]
+        if then is None:
+            then_cell = moved_cell = "–"
+        else:
+            moved = working_days_between(then + timedelta(days=1), last + timedelta(days=1), holidays)
+            then_cell = then.isoformat()
+            moved_cell = format_signed(moved, " working days") if moved else "no change"
+        rows.append(f"<tr><td>{html.escape(name)}</td><td>{then_cell}</td>"
+                    f"<td>{last}</td><td>{moved_cell}</td></tr>")
+    table = ("<details><summary>Show as table</summary><table><tr><th>Epic</th>"
+             f"<th>Planned end {compare_run}</th>"
              "<th>Latest planned end</th><th>Moved</th></tr>" + "".join(rows) + "</table></details>")
 
     return f"""<div id="trend">
@@ -1215,7 +1216,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     holidays_json = json.dumps(sorted(d.isoformat() for d in holidays))
     show_changes_json = "true" if changes else "false"
     if changes:
-        since = format_day(changes["since"])
+        since = changes["since"]
         changes_toggle = (f'<label id="show-changes-wrap"><input type="checkbox" id="show-changes" checked '
                           f'onchange="onShowChangesChange()"> Show changes since {since}</label>')
         moved_column = (',\n  {name: "moved", label: "Moved", align: "center", width: 70, resize: true,'
@@ -1224,7 +1225,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
         changes_toggle = ""
         moved_column = ""
     summary_html = changes_summary_html(changes) if changes else ""
-    trend = trend_html(list(snapshots), epic_color_map, set(holidays))
+    trend = trend_html(list(snapshots), epic_color_map, set(holidays), changes["since"] if changes else None)
 
     # Each status color has one CSS class, used on the grid row and the timeline row
     status_colors = status_colors or {}
@@ -1239,7 +1240,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Gantt Chart — {date.today().strftime('%B %-d, %Y')}</title>
+<title>Gantt Chart — {date.today()}</title>
 <link rel="stylesheet" href="https://cdn.dhtmlx.com/gantt/9.0/dhtmlxgantt.css">
 <style>
   body {{ font-family: sans-serif; margin: 20px; }}
@@ -1312,7 +1313,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
 </style>
 </head>
 <body>
-<h2>Gantt Chart — {date.today().strftime('%B %-d, %Y')}</h2>
+<h2>Gantt Chart — {date.today()}</h2>
 <div id="toolbar">
   <div class="zoom-buttons">
     <button onclick="setZoom('day')">Day</button>
