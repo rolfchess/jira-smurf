@@ -181,6 +181,7 @@ class GanttConfig:
     status_colors: dict  # {lowercase_name: css_color}
     work_start_progress: float  # progress of the status where work on a story starts, 0 if not set
     use_backlog_order: bool  # schedule stories in Jira backlog order instead of the order of the configuration file
+    order_epics_by_rank: bool  # show the epic rows in the order of the Jira Rank of the epics
     dependency_links: list  # lowercase names of Jira link types that make a story wait for another
     auto_assign: bool  # give stories without a team member to the team; if False, plan them under "Unassigned"
 
@@ -330,6 +331,7 @@ def load_gantt_config(path="gantt.toml"):
     include_open_sprints = raw.get("include_open_sprints", False)
     include_future_sprints = raw.get("include_future_sprints", False)
     use_backlog_order = raw.get("use_backlog_order", False)
+    order_epics_by_rank = raw.get("order_epics_by_rank", False)
     dependency_links = raw.get("dependency_links", ["Blocks"])
     if not isinstance(dependency_links, list) or not all(isinstance(name, str) for name in dependency_links):
         print(f"Error: 'dependency_links' must be a list of Jira link type names, got {dependency_links!r}",
@@ -337,7 +339,8 @@ def load_gantt_config(path="gantt.toml"):
         sys.exit(1)
     for name, val in (("include_open_sprints", include_open_sprints),
                       ("include_future_sprints", include_future_sprints),
-                      ("use_backlog_order", use_backlog_order)):
+                      ("use_backlog_order", use_backlog_order),
+                      ("order_epics_by_rank", order_epics_by_rank)):
         if not isinstance(val, bool):
             print(f"Error: '{name}' must be true or false, got {val!r}", file=sys.stderr)
             sys.exit(1)
@@ -357,6 +360,7 @@ def load_gantt_config(path="gantt.toml"):
                        status_colors=status_colors,
                        work_start_progress=work_start_progress,
                        use_backlog_order=use_backlog_order,
+                       order_epics_by_rank=order_epics_by_rank,
                        dependency_links=[name.lower() for name in dependency_links],
                        auto_assign=auto_assign_team)
 
@@ -435,9 +439,9 @@ def fetch_stories_by_keys(story_keys, warn_missing=True):
     return by_key
 
 
-def fetch_backlog_order(story_keys):
-    """Return {story key: position in the Jira backlog} for the given stories, based on the Rank field."""
-    jql = f"key in ({', '.join(story_keys)}) ORDER BY Rank ASC"
+def fetch_backlog_order(issue_keys):
+    """Return {issue key: position in the Jira backlog} for the given stories or epics, based on the Rank field."""
+    jql = f"key in ({', '.join(issue_keys)}) ORDER BY Rank ASC"
     positions = {}
     next_page_token = None
     while True:
@@ -1291,7 +1295,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     without an image there is shown with an emoji.
     epics_info is {epic key: {key, name, start, due}} from fetch_epics. roadmap_epics lists
     epics without stories; each is shown as a striped bar from its start to its due date.
-    epic_order is the list of epic keys in the order of the configuration file.
+    epic_order is the list of epic keys in the order of the rows. Epics that are not in it come after them.
     """
     # Assign colors to epics
     epics_seen = []
@@ -1320,7 +1324,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
         if s["epic"] not in epic_name_to_key and s.get("epic_key"):
             epic_name_to_key[s["epic"]] = s["epic_key"]
 
-    # Order of the epic rows: the epics of the configuration file in its order, then the others
+    # Order of the epic rows: the epics of epic_order in its order, then the others
     epics_info = epics_info or {}
     roadmap_by_key = {r["key"]: r for r in roadmap_epics}
     key_to_name = {key: name for name, key in epic_name_to_key.items()}
@@ -2366,6 +2370,13 @@ def run_gantt(config_path, history_dir=None, since=None):
         print(f"  Epic {key} has no stories yet, showing its dates from Jira", file=sys.stderr)
         roadmap_epics.append(info)
 
+    # The epic rows follow the configuration file, or the Jira Rank of the epics
+    epic_order = list(config.epics)
+    if config.order_epics_by_rank and epic_keys:
+        print("Fetching the rank of the epics...", file=sys.stderr)
+        positions = fetch_backlog_order(epic_keys)
+        epic_order = sorted(epic_keys, key=lambda key: positions.get(key, len(positions)))
+
     # Put the Jira issue type icons into the page, so it shows them without a Jira login
     epic_icon_url = find_epic_icon_url(story_data.values())
     icon_urls = [s["issue_type_icon_url"] for s in scheduled if s["issue_type_icon_url"]]
@@ -2379,7 +2390,7 @@ def run_gantt(config_path, history_dir=None, since=None):
         icon_images = fetch_icon_images(icon_urls)
 
     write_gantt_html(scheduled, config.statuses, config.dependencies, config.holidays, config.status_colors,
-                     changes, snapshots, icon_images, epic_icon_url, epics_info, roadmap_epics, config.epics)
+                     changes, snapshots, icon_images, epic_icon_url, epics_info, roadmap_epics, epic_order)
 
 
 def run_velocity(config_path, weeks):
