@@ -2,6 +2,7 @@
 """Export Jira Cloud stories as CSV or HTML, or plan them in a Gantt chart."""
 
 import argparse
+import base64
 import contextlib
 import csv
 import glob
@@ -495,6 +496,44 @@ def work_dates(status_changes, statuses, work_start_progress=0.0):
     return start, end
 
 
+def find_epic_icon_url(issues):
+    """Return the address of the Epic issue type icon, or "" if Jira has none."""
+    # In team-managed projects the parent of a story is its epic, with its issue type
+    for issue in issues:
+        parent_type = ((issue["fields"].get("parent") or {}).get("fields") or {}).get("issuetype") or {}
+        if parent_type.get("name", "").lower() == "epic" and parent_type.get("iconUrl"):
+            return parent_type["iconUrl"]
+    try:
+        issue_types = jira_get("issuetype")
+    except requests.RequestException:
+        return ""
+    for issue_type in issue_types:
+        if issue_type.get("name", "").lower() == "epic" and issue_type.get("iconUrl"):
+            return issue_type["iconUrl"]
+    return ""
+
+
+def fetch_icon_images(urls):
+    """Download icon images from Jira and return {address: data URI}.
+
+    An icon that cannot be downloaded is left out, with a warning.
+    """
+    images = {}
+    for url in sorted(set(urls)):
+        try:
+            resp = requests.get(url, auth=(JIRA_EMAIL, JIRA_API_TOKEN), timeout=30)
+            resp.raise_for_status()
+        except requests.RequestException as e:
+            print(f"Warning: could not download icon {url}: {e}", file=sys.stderr)
+            continue
+        content_type = resp.headers.get("Content-Type", "").split(";")[0].strip()
+        if not content_type.startswith("image/"):
+            print(f"Warning: icon {url} is not an image ({content_type or 'no type'})", file=sys.stderr)
+            continue
+        images[url] = f"data:{content_type};base64,{base64.b64encode(resp.content).decode('ascii')}"
+    return images
+
+
 def resolve_epic_for_issue(issue, epic_cache):
     """Resolve epic name for an issue, using and updating the cache."""
     cache_key = None
@@ -699,6 +738,7 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
             "sprint": sprint,
             "due": issue["fields"].get("duedate") or "",
             "issue_type": (issue["fields"].get("issuetype") or {}).get("name", ""),
+            "issue_type_icon_url": (issue["fields"].get("issuetype") or {}).get("iconUrl", ""),
             "effort": 0 if progress >= 1.0 else hours,
             "total_hours": total_hours,
             "start": start_date.isoformat(),
@@ -722,6 +762,7 @@ def plan_snapshot(scheduled, status_map, run_date):
             "epic": s["epic"],
             "epic_key": s.get("epic_key", ""),
             "issue_type": s.get("issue_type", ""),
+            "issue_type_icon_url": s.get("issue_type_icon_url", ""),
             "status": s["status"],
             "progress": progress,
             "total_hours": s["total_hours"],
@@ -1081,11 +1122,13 @@ EPIC_COLORS = [
 
 
 def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=(), status_colors=None,
-                     changes=None, snapshots=()):
+                     changes=None, snapshots=(), icon_images=None, epic_icon_url=""):
     """Write a self-contained HTML file with a DHTMLX Gantt chart.
 
     With changes (from compare_plans), the chart can mark what changed since the baseline.
     With two or more snapshots, a trend chart of the planned end dates is added below it.
+    icon_images is {icon address: data URI} for the issue type icons from Jira. A type
+    without an image there is shown with an emoji.
     """
     # Assign colors to epics
     epics_seen = []
@@ -1149,6 +1192,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             "type": "project",
             "open": True,
             "icon": ISSUE_TYPE_ICONS["epic"],
+            "icon_url": epic_icon_url,
             "story_key": epic_name_to_key.get(epic_name, ""),
             "progress": epic_progress,
             **(changes["epics"].get(epic_name, {}) if changes else {}),
@@ -1184,6 +1228,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             "story_key": s["key"],
             "due_date": s.get("due", ""),
             "icon": issue_type_icon(s.get("issue_type", "")),
+            "icon_url": s.get("issue_type_icon_url", ""),
             **(changes["stories"].get(s["key"], {}) if changes else {}),
         })
 
@@ -1211,6 +1256,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
                 "id": task_id,
                 "text": f"{r['key']}: {r['title']} ({r['epic']})",
                 "icon": issue_type_icon(r.get("issue_type", "")),
+                "icon_url": r.get("issue_type_icon_url", ""),
                 "start_date": r["start"],
                 "end_date": r["end"],
                 "progress": 0,
@@ -1248,6 +1294,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     links_json = json.dumps(links, indent=2)
     holidays_json = json.dumps(sorted(d.isoformat() for d in holidays))
     show_changes_json = "true" if changes else "false"
+    icon_images_json = json.dumps(icon_images or {})
     if changes:
         since = changes["since"]
         changes_toggle = (f'<label id="show-changes-wrap"><input type="checkbox" id="show-changes" checked '
@@ -1337,6 +1384,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   #trend table {{ border-collapse: collapse; margin-top: 6px; }}
   #trend th, #trend td {{ border: 1px solid #ddd; padding: 4px 10px; text-align: left; }}
   .type-icon {{ margin-right: 5px; }}
+  img.type-icon {{ width: 16px; height: 16px; vertical-align: -3px; }}
   .tree-buttons {{ margin-left: 12px; }}
   .tree-buttons button {{
     padding: 1px 8px; margin-right: 4px; border: 1px solid #ccc; border-radius: 4px;
@@ -1369,6 +1417,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
 <script src="https://cdn.dhtmlx.com/gantt/9.0/dhtmlxgantt.js"></script>
 <script>
 gantt.plugins({{ tooltip: true, marker: true }});
+var typeIconImages = {icon_images_json};  // {{icon address: data URI}} of the issue type icons from Jira
 var showChanges = {show_changes_json};
 function signed(value, unit) {{
   var number = Math.round(Math.abs(value) * 10) / 10;
@@ -1401,7 +1450,9 @@ gantt.config.columns = [
       "<button onclick='setAllOpen(false); event.stopPropagation();'>Collapse all</button>" +
       "<button onclick='setAllOpen(true); event.stopPropagation();'>Expand all</button></span>",
     template: function(task) {{
-      var icon = task.icon ? "<span class='type-icon'>" + task.icon + "</span>" : "";
+      var image = typeIconImages[task.icon_url];
+      var icon = image ? "<img class='type-icon' src='" + image + "' alt=''>" :
+        task.icon ? "<span class='type-icon'>" + task.icon + "</span>" : "";
       return icon + "<span title='" + task.text.replace(/'/g, "&#39;") + "'>" + task.text + "</span>";
     }} }},
   {{name: "status", label: "Status", align: "left", width: 120, resize: true}},
@@ -1899,8 +1950,20 @@ def run_gantt(config_path, history_dir=None, since=None):
             json.dump(current, f, indent=1)
         print(f"Wrote {snapshot_path}", file=sys.stderr)
 
+    # Put the Jira issue type icons into the page, so it shows them without a Jira login
+    epic_icon_url = find_epic_icon_url(story_data.values())
+    icon_urls = [s["issue_type_icon_url"] for s in scheduled if s["issue_type_icon_url"]]
+    if changes:
+        icon_urls += [r["issue_type_icon_url"] for r in changes["removed"] if r.get("issue_type_icon_url")]
+    if epic_icon_url:
+        icon_urls.append(epic_icon_url)
+    icon_images = {}
+    if icon_urls:
+        print(f"Downloading {len(set(icon_urls))} issue type icons...", file=sys.stderr)
+        icon_images = fetch_icon_images(icon_urls)
+
     write_gantt_html(scheduled, config.statuses, config.dependencies, config.holidays, config.status_colors,
-                     changes, snapshots)
+                     changes, snapshots, icon_images, epic_icon_url)
 
 
 def run_export(fmt):
