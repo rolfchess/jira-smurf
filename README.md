@@ -90,6 +90,7 @@ How the planning works:
 - A story assigned in Jira to a team member goes to that member. Other stories go to the auto-assign member who is free first.
 - Remaining work is the estimate times (1 minus the progress of the status).
 - A story without story points gets `default_hours`. Its remaining hours have a question mark, for example `40h?`. The total of its epic has a question mark too.
+- The duration of an epic depends only on its stories. The epic starts with its first story and ends with its last story. Its remaining hours are the sum of the remaining hours of its stories. Story points set on the epic itself are ignored.
 - Stories that are not done start on today's date at the earliest.
 - A done story is placed from its Jira status history. It starts on the first change to the `work_starts_at` status or a status with more progress. Without `work_starts_at`, it starts on the first change to a status with progress above 0. It ends on the last change to a status at 100. A done story without such a change is placed at the start of the plan.
 
