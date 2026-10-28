@@ -669,6 +669,10 @@ def has_working_hours(availability):
     return sum(availability.get(d, 0) for d in ("mon", "tue", "wed", "thu", "fri")) > 0
 
 
+# These are the working hours of a person who is not in [team]: 8 hours a day, Monday to Friday.
+OUTSIDE_TEAM_HOURS = {"mon": 8, "tue": 8, "wed": 8, "thu": 8, "fri": 8, "auto_assign": False}
+
+
 def get_earliest_available_member(member_states, team):
     """Return the name of the auto-assign member who becomes free earliest."""
     candidates = [name for name in member_states if team[name].get("auto_assign", True)]
@@ -743,6 +747,9 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
     for name in config.team:
         if has_working_hours(config.team[name]):
             member_states[name] = next_working_day(config.start_date, config.team[name])
+    # This has the hours of the team members and of the assignees who are not in [team]
+    availability = dict(config.team)
+    outside_hours = dict(OUTSIDE_TEAM_HOURS, days_off=set(config.holidays))
 
     scheduled = []
     story_end_dates = {}  # {story_key: end_date} for dependency resolution
@@ -769,17 +776,28 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
         hours = total_hours if progress >= 1.0 else total_hours * (1.0 - progress)
 
         # Determine who works on this story
-        if assignee_name in member_states:
-            member = assignee_name
+        if progress >= 1.0:
+            # A done story keeps its assignee from Jira and takes no time from anyone.
+            # Without Jira dates, it is placed on these standard working days from the plan start.
+            member = None
+            avail = outside_hours
+            cursor = next_working_day(config.start_date, avail)
         else:
-            if assignee_name in config.team:
-                print(f"Warning: assignee '{assignee_name}' for {story_key} has no working hours, auto-assigning", file=sys.stderr)
-            elif assignee_name != "Unassigned":
-                print(f"Warning: assignee '{assignee_name}' for {story_key} not in [team], auto-assigning", file=sys.stderr)
-            member = get_earliest_available_member(member_states, config.team)
-
-        avail = config.team[member]
-        cursor = member_states[member]
+            if assignee_name in member_states:
+                member = assignee_name
+            elif assignee_name != "Unassigned" and assignee_name not in config.team:
+                print(f"Warning: assignee '{assignee_name}' is not in [team], so their stories are planned "
+                      f"with 8 hours a day, Monday to Friday. Add them to [team] for their real hours.",
+                      file=sys.stderr)
+                availability[assignee_name] = outside_hours
+                member_states[assignee_name] = next_working_day(config.start_date, outside_hours)
+                member = assignee_name
+            else:
+                if assignee_name in config.team:
+                    print(f"Warning: assignee '{assignee_name}' for {story_key} has no working hours, auto-assigning", file=sys.stderr)
+                member = get_earliest_available_member(member_states, availability)
+            avail = availability[member]
+            cursor = member_states[member]
 
         if progress >= 1.0 and story_key in done_dates:
             # A done story is shown on the days it was worked on, from its Jira status history
@@ -828,7 +846,7 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
             "title": title,
             "epic": issue.get("_epic", "(No Epic)"),
             "epic_key": issue.get("_epic_key", ""),
-            "assignee": member,
+            "assignee": member or assignee_name,
             "status": status,
             "sprint": sprint,
             "due": issue["fields"].get("duedate") or "",
@@ -1290,6 +1308,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
                 "story_key": row["key"],
                 "progress": 0,
                 "roadmap": True,
+                "is_epic": True,
                 "due_date": row["due"],
             })
             continue
@@ -1328,6 +1347,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             "color": epic_color_map[epic_name],
             "type": "project",
             "open": True,
+            "is_epic": True,
             "icon": ISSUE_TYPE_ICONS["epic"],
             "unestimated": epic_unestimated,
             "icon_url": epic_icon_url,
@@ -1503,7 +1523,9 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   .gantt_task_line.change-removed {{ opacity: 0.5; }}
   .gantt_task_line.roadmap-epic {{ opacity: 0.75;
     background-image: repeating-linear-gradient(45deg, rgba(255,255,255,0.45) 0 6px, transparent 6px 12px); }}
-  .gantt_task_line.change-late {{ box-shadow: 0 0 0 2px #d62728; }}
+  .gantt_task_line.epic-bar .gantt_task_content {{ font-weight: 600; }}
+  .gantt_task_line.due-late {{ box-shadow: 0 0 0 2px #d62728; }}
+  .gantt_task_line.change-late {{ box-shadow: 0 0 0 2px #ff8c00; }}
   .delta-up {{ color: #c62828; font-weight: 600; }}
   .delta-down {{ color: #2e7d32; font-weight: 600; }}
   .due-marker {{ position: absolute; width: 10px; height: 10px; background: #d62728; border: 1px solid #fff;
@@ -1599,7 +1621,8 @@ gantt.config.columns = [
       var image = typeIconImages[task.icon_url];
       var icon = image ? "<img class='type-icon' src='" + image + "' alt=''>" :
         task.icon ? "<span class='type-icon'>" + task.icon + "</span>" : "";
-      return icon + "<span title='" + task.text.replace(/'/g, "&#39;") + "'>" + task.text + "</span>";
+      var title = task.is_epic ? "<b>" + task.text + "</b>" : task.text;
+      return icon + "<span title='" + task.text.replace(/'/g, "&#39;") + "'>" + title + "</span>";
     }} }},
   {{name: "status", label: "Status", align: "left", width: 120, resize: true}},
   {{name: "effort", label: "Remaining", align: "center", width: 100, resize: true, template: effortText}}{moved_column}
@@ -1763,6 +1786,12 @@ function zoomToFit() {{
 var searchTerm = "";
 var searchMatchIds = {{}};      // {{taskId: true}} for tasks whose own text matches
 var searchVisibleIds = {{}};    // {{taskId: true}} for matches + their ancestors (kept un-dimmed)
+// True when the bar ends after the end of the due date of the task.
+function endsAfterDueDate(task) {{
+  if (!task.due_date) return false;
+  var dayAfterDue = gantt.date.add(gantt.date.str_to_date("%Y-%m-%d")(task.due_date), 1, "day");
+  return task.end_date > dayAfterDue;
+}}
 function changeBarClass(task) {{
   if (!showChanges) return "";
   if (task.removed) return " change-removed";
@@ -1777,8 +1806,11 @@ function joinClasses() {{
   return Array.prototype.filter.call(arguments, Boolean).join(" ");
 }}
 gantt.templates.task_class = function(start, end, task) {{
-  var base = (task.progress >= 1 ? "clickable-task task-done" : "clickable-task") + changeBarClass(task) +
-    (task.roadmap ? " roadmap-epic" : "");
+  // Red for ending after the due date wins over orange for being behind the baseline
+  var pastDueDate = !task.removed && task.progress < 1 && endsAfterDueDate(task);
+  var base = (task.progress >= 1 ? "clickable-task task-done" : "clickable-task") +
+    (pastDueDate ? " due-late" : changeBarClass(task)) +
+    (task.roadmap ? " roadmap-epic" : "") + (task.is_epic ? " epic-bar" : "");
   if (!searchTerm) return base;
   if (searchMatchIds[task.id]) return base + " search-match";
   if (searchVisibleIds[task.id]) return base;

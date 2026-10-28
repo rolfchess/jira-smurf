@@ -97,6 +97,10 @@ How the planning works:
 - A story never starts before the stories in its `depends_on` list are finished. The same holds for stories that block it in Jira, with a link type from `dependency_links`. Both kinds of dependencies have an arrow in the chart. Links to stories that are not in the plan are ignored.
 - A story assigned in Jira to a team member goes to that member. Other stories go to the auto-assign
   member who is free first.
+- A story assigned in Jira to someone who is not in `[team]` keeps that assignee. That person is
+  planned with 8 hours a day, Monday to Friday. They never get stories without an assignee. Add them
+  to `[team]` to plan them with their real hours.
+- A done story keeps its assignee from Jira. It does not use the hours of anyone in the team.
 - Remaining work is the estimate times (1 minus the progress of the status).
 - A story without story points gets `default_hours`. Its remaining hours have a question mark, for
   example `40h?`. The total of its epic has a question mark too.
@@ -121,7 +125,8 @@ login. If an icon cannot be downloaded, the page shows an emoji instead: 📖 ep
 support request, 🧹 technical debt and 📄 any other type. In the day view, weekends and holidays
 have a gray background. When a story or epic has a due date in Jira, the chart shows a red diamond
 on its row. The diamond is at the end of the due date. The bar of the epic will grow past the due
-date according to the planned stories.
+date according to the planned stories. A story or epic that is not done and ends after its due date
+has a red outline. Epic titles are bold.
 
 ### Changes and trend
 
@@ -141,7 +146,8 @@ The checkbox "Show changes since …" in the toolbar turns these marks on and of
   `16h +8h`.
 - A thin gray bar under a story or epic shows its dates in the baseline.
 - The Moved column shows how many working days the end date moved.
-- A story that the baseline planned to be done by now, but that is still open, has a red outline.
+- A story that the baseline planned to be done by now, but that is still open, has an orange
+  outline. If it also ends after its due date, the outline is red.
 - Open stories that are no longer in the plan are listed in a gray group at the end of the chart.
 
 Below the chart, a summary shows how far the plan end moved and why: new stories, changed estimates,
