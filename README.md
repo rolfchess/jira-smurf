@@ -119,7 +119,10 @@ How the planning works:
   done story without such a change is placed at the start of the plan.
 
 In the chart you can zoom, search for a story and show or hide done stories. Done stories are hidden
-at first. Click a bar to open the story in Jira. The buttons in the Story column header collapse or
+at first. Click a team member badge above the table to show only the stories of that member. You can
+select more than one member, and "Unassigned". The epic rows then show the points and remaining hours
+of the stories that are shown. The Points and Sprint columns show the story points and the number of
+the last sprint of each story. Click a bar to open the story in Jira. The buttons in the Story column header collapse or
 expand all epics. Each title in the Story column starts with the icon of its Jira issue type. The
 run downloads these icons from Jira and puts them in the page, so the page shows them without a Jira
 login. If an icon cannot be downloaded, the page shows an emoji instead: 📖 epic, 🔖 story, 🐛 bug,

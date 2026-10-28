@@ -1417,6 +1417,8 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             "end_date": s["end"],
             "progress": progress,
             "points": format_points(s.get("points")),
+            "points_value": s.get("points") or 0,
+            "hours": effort,
             "sprint": sprint_number(s.get("sprint", "")),
             "sprint_name": s.get("sprint", ""),
             "effort": effort_str,
@@ -1523,7 +1525,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
 <link rel="stylesheet" href="https://cdn.dhtmlx.com/gantt/9.0/dhtmlxgantt.css">
 <style>
   body {{ font-family: sans-serif; margin: 20px; }}
-  #gantt_here {{ width: 100%; height: calc(100vh - 110px); }}
+  #gantt_here {{ width: 100%; height: calc(100vh - 150px); }}
   .gantt_task_line.task-done {{ opacity: 0.45; filter: grayscale(60%); }}
   .gantt_task_line.task-done .gantt_task_content {{ text-decoration: line-through; }}
   .gantt_row.task-done-row {{ color: #999; }}
@@ -1548,6 +1550,16 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   }}
   #search-input:focus {{ outline: none; border-color: #4e79a7; }}
   #search-count {{ font-size: 12px; color: #666; min-width: 70px; }}
+  #member-filter {{ margin-bottom: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; }}
+  #member-filter .filter-label {{ color: #666; margin-right: 4px; }}
+  .member-badge {{
+    padding: 3px 10px; border: 1px solid #ccc; border-radius: 12px;
+    background: #fff; cursor: pointer; font-size: 12px;
+  }}
+  .member-badge:hover {{ background: #e8e8e8; }}
+  .member-badge.active {{ background: #4e79a7; color: #fff; border-color: #4e79a7; }}
+  .member-badge .count {{ margin-left: 4px; opacity: 0.7; }}
+  #member-clear {{ border: none; background: none; color: #4e79a7; cursor: pointer; font-size: 12px; text-decoration: underline; }}
   .gantt_task_line.search-match {{ outline: 3px solid #ffd400; outline-offset: 2px; z-index: 50; }}
   .gantt_task_line.search-dim {{ opacity: 0.2; }}
   .gantt_row.search-match-row {{ background: #fff7c2 !important; font-weight: 600; }}
@@ -1614,13 +1626,14 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     <button onclick="setZoom('quarter')">Quarter</button>
     <button onclick="zoomToFit()">Fit All</button>
   </div>
-  <label id="show-done-wrap"><input type="checkbox" id="show-done" onchange="onShowDoneChange()"> Show done stories</label>
+  <label id="show-done-wrap"><input type="checkbox" id="show-done" onchange="applyFilters()"> Show done stories</label>
   {changes_toggle}
   <div id="search-wrap">
     <input id="search-input" type="search" placeholder="Search stories, for example PROJ-123" oninput="onSearchInput()" onkeydown="if(event.key==='Escape'){{this.value='';onSearchInput();}}">
     <span id="search-count"></span>
   </div>
 </div>
+<div id="member-filter"></div>
 <div id="gantt_here"></div>
 {summary_html}
 {trend}
@@ -1761,18 +1774,30 @@ function setZoom(level) {{
   }});
 }}
 var hideDone = false;
+var selectedMembers = {{}};  // {{assignee: true}} for the team members whose stories are shown; empty shows all
+var memberCounts = {{}};  // {{assignee: count element}} in the badges
 var epicDates = {{}};  // {{epicId: {{start_date, end_date}}}} with the dates from all stories
+var epicTotals = {{}};  // {{epicId: {{effort, points}}}} with the totals of all stories
+function isFiltering() {{
+  return hideDone || Object.keys(selectedMembers).length > 0;
+}}
+function isStoryShown(task) {{
+  if (hideDone && task.progress >= 1) return false;
+  return Object.keys(selectedMembers).length === 0 || !!selectedMembers[task.assignee];
+}}
 function isTaskShown(task) {{
   if (task.removed) return showChanges;
-  if (!hideDone) return true;
-  if (task.type === "project") return !!openStoryDates(task.id);
-  return task.progress < 1;
+  if (!isFiltering()) return true;
+  // An epic without stories has no team member
+  if (task.roadmap) return Object.keys(selectedMembers).length === 0;
+  if (gantt.hasChild(task.id)) return !!shownStoryDates(task.id);
+  return isStoryShown(task);
 }}
-// Earliest start and latest end of the stories of an epic that are not done, or null.
-function openStoryDates(epicId) {{
+// Earliest start and latest end of the stories of an epic that pass the filters, or null.
+function shownStoryDates(epicId) {{
   var start = null, end = null;
   gantt.eachTask(function(child) {{
-    if (child.progress >= 1) return;
+    if (!isStoryShown(child)) return;
     if (!start || child.start_date < start) start = child.start_date;
     if (!end || child.end_date > end) end = child.end_date;
   }}, epicId);
@@ -1781,17 +1806,90 @@ function openStoryDates(epicId) {{
 gantt.attachEvent("onBeforeTaskDisplay", function(id, task) {{
   return isTaskShown(task);
 }});
-function onShowDoneChange() {{
+// Remaining hours and points of the stories of an epic that pass the filters.
+// The hours get a "?" when one of those stories has no estimate.
+function shownStoryTotals(epicId) {{
+  var hours = 0, points = 0, guess = false;
+  gantt.eachTask(function(child) {{
+    if (!isStoryShown(child)) return;
+    hours += child.hours || 0;
+    points += child.points_value || 0;
+    if (child.unestimated) guess = true;
+  }}, epicId);
+  return {{
+    effort: Math.round(hours * 10) / 10 + "h" + (guess ? "?" : ""),
+    points: points ? String(Math.round(points * 100) / 100) : "",
+  }};
+}}
+// Show in each badge the number of stories of that member that pass the done filter.
+function updateMemberCounts() {{
+  var counts = {{}};
+  gantt.eachTask(function(task) {{
+    if (!task.assignee || (hideDone && task.progress >= 1)) return;
+    counts[task.assignee] = (counts[task.assignee] || 0) + 1;
+  }});
+  Object.keys(memberCounts).forEach(function(name) {{
+    memberCounts[name].textContent = counts[name] || 0;
+  }});
+}}
+// One badge per assignee of the stories, "Unassigned" last. A click selects or deselects that member.
+function buildMemberFilter() {{
+  var counts = {{}};
+  gantt.eachTask(function(task) {{
+    if (task.assignee) counts[task.assignee] = (counts[task.assignee] || 0) + 1;
+  }});
+  var names = Object.keys(counts).sort(function(a, b) {{
+    if (a === "Unassigned" || b === "Unassigned") return a === "Unassigned" ? 1 : -1;
+    return a.localeCompare(b);
+  }});
+  var bar = document.getElementById("member-filter");
+  var label = document.createElement("span");
+  label.className = "filter-label";
+  label.textContent = "Team member:";
+  bar.appendChild(label);
+  names.forEach(function(name) {{
+    var badge = document.createElement("button");
+    badge.className = "member-badge";
+    badge.textContent = name;
+    var count = document.createElement("span");
+    count.className = "count";
+    memberCounts[name] = count;
+    badge.appendChild(count);
+    badge.onclick = function() {{
+      if (selectedMembers[name]) delete selectedMembers[name]; else selectedMembers[name] = true;
+      badge.classList.toggle("active", !!selectedMembers[name]);
+      applyFilters();
+    }};
+    bar.appendChild(badge);
+  }});
+  var clear = document.createElement("button");
+  clear.id = "member-clear";
+  clear.textContent = "Show all";
+  clear.onclick = function() {{
+    selectedMembers = {{}};
+    bar.querySelectorAll(".member-badge").forEach(function(b) {{ b.classList.remove("active"); }});
+    applyFilters();
+  }};
+  bar.appendChild(clear);
+}}
+function applyFilters() {{
   hideDone = !document.getElementById("show-done").checked;
+  document.getElementById("member-clear").style.display = Object.keys(selectedMembers).length ? "" : "none";
   gantt.eachTask(function(task) {{
     if (task.parent !== gantt.config.root_id || task.removed || task.roadmap) return;
     if (!epicDates[task.id]) epicDates[task.id] = {{ start_date: task.start_date, end_date: task.end_date }};
-    var dates = hideDone ? openStoryDates(task.id) : null;
-    // A "project" task takes its dates from all its children, so use a plain task while done stories are hidden.
+    var dates = isFiltering() ? shownStoryDates(task.id) : null;
+    // A "project" task takes its dates from all its children, so use a plain task while stories are hidden.
     task.type = dates ? "task" : "project";
     task.start_date = (dates || epicDates[task.id]).start_date;
     task.end_date = (dates || epicDates[task.id]).end_date;
+    // The totals of the epic row count only the stories that are shown
+    if (!epicTotals[task.id]) epicTotals[task.id] = {{ effort: task.effort, points: task.points }};
+    var totals = isFiltering() ? shownStoryTotals(task.id) : epicTotals[task.id];
+    task.effort = totals.effort;
+    task.points = totals.points;
   }});
+  updateMemberCounts();
   zoomToFit();
   gantt.render();
 }}
@@ -2009,7 +2107,8 @@ gantt.addMarker({{ start_date: new Date(), css: "today-marker", text: "Today" }}
   }});
 }})();
 gantt.parse({{ data: {tasks_json}, links: {links_json} }});
-onShowDoneChange();
+buildMemberFilter();
+applyFilters();
 (function() {{
   var svg = document.getElementById("trend-svg");
   if (!svg) return;
