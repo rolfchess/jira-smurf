@@ -133,7 +133,9 @@ sprints is back in the backlog, so it has no sprint. A done story shows the spri
 number is shown. The Sprint list in the toolbar shows only the stories of one sprint, and only the
 epics that have stories in it. It works together with the team member badges, and the epic rows then
 count only the stories of that sprint. "No longer in the plan" is hidden while a sprint is selected,
-because snapshots have no sprints. Click a bar, or the key of a story in the Story column, to open the story in Jira in a new tab. The
+because snapshots have no sprints. Next to each story bar are its assignee, its last planned day and its age, for example `12d old`.
+The age is the number of weekdays from the day the story was created in Jira up to today. Holidays
+count as weekdays here. Click a bar, or the key of a story in the Story column, to open the story in Jira in a new tab. The
 Status column shows the status as a badge: gray before work starts, blue while in progress and green
 when done, from the progress of the status in `[statuses]`. The buttons in the Story column header collapse or
 expand all epics. Each title in the Story column starts with the icon of its Jira issue type. The

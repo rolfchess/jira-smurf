@@ -383,7 +383,7 @@ def fetch_stories_for_epic(epic_key):
     Tries next-gen (parent) first, falls back to classic (Epic Link).
     Returns list of issue dicts.
     """
-    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10028,duedate,issuetype,issuelinks"
+    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10028,duedate,issuetype,issuelinks,created"
 
     for jql in (
         f"parent = {epic_key} AND issuetype = Story ORDER BY key ASC",
@@ -422,7 +422,7 @@ def fetch_stories_by_keys(story_keys, warn_missing=True):
     """
     keys_str = ", ".join(story_keys)
     jql = f"key in ({keys_str})"
-    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10028,duedate,issuetype,issuelinks"
+    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10028,duedate,issuetype,issuelinks,created"
     issues = []
     next_page_token = None
 
@@ -497,7 +497,7 @@ def fetch_sprint_stories(include_open, include_future):
         sprint_functions.append("futureSprints()")
     sprint_clause = " OR ".join(f"sprint in {f}" for f in sprint_functions)
     jql = f"project = {JIRA_PROJECT} AND issuetype = Story AND ({sprint_clause}) ORDER BY key ASC"
-    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10028,duedate,issuetype,issuelinks"
+    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10028,duedate,issuetype,issuelinks,created"
     issues = []
     next_page_token = None
 
@@ -891,6 +891,7 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
             "status": status,
             "sprint": sprint,
             "due": issue["fields"].get("duedate") or "",
+            "created": (issue["fields"].get("created") or "")[:10],  # YYYY-MM-DD
             "issue_type": (issue["fields"].get("issuetype") or {}).get("name", ""),
             "issue_type_icon_url": (issue["fields"].get("issuetype") or {}).get("iconUrl", ""),
             "effort": 0 if progress >= 1.0 else hours,
@@ -1437,6 +1438,9 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             "parent": epic_task_ids[s["epic"]],
             "story_key": s["key"],
             "due_date": s.get("due", ""),
+            # Weekdays from the day the story was created up to today, holidays included
+            "age_days": (working_days_between(date.fromisoformat(s["created"]), date.today(), frozenset())
+                         if s.get("created") else None),
             "icon": issue_type_icon(s.get("issue_type", "")),
             "icon_url": s.get("issue_type_icon_url", ""),
             "unestimated": unestimated,
@@ -2150,6 +2154,9 @@ gantt.templates.rightside_text = function(start, end, task) {{
   var parts = [];
   if (task.assignee) parts.push(escapeHtml(task.assignee));
   parts.push(gantt.date.date_to_str("%d %M")(end));
+  if (task.age_days != null) {{
+    parts.push("<span title='Weekdays since the story was created in Jira'>" + task.age_days + "d old</span>");
+  }}
   return "<span style='font-size:11px;color:#666;'>" + parts.join(" \u2022 ") + "</span>";
 }};
 var holidays = new Set({holidays_json});
