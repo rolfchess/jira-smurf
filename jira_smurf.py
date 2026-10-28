@@ -148,7 +148,8 @@ UNASSIGNED = "Unassigned"  # the assignee of stories without one, and their plan
 def get_assignee(fields):
     assignee = fields.get("assignee")
     if assignee:
-        return assignee.get("displayName", "")
+        # Jira can leave out the display name, for example for a deactivated user
+        return assignee.get("displayName") or assignee.get("emailAddress") or assignee.get("accountId") or UNASSIGNED
     return UNASSIGNED
 
 
@@ -904,6 +905,7 @@ def plan_snapshot(scheduled, status_map, run_date):
             "issue_type": s.get("issue_type", ""),
             "issue_type_icon_url": s.get("issue_type_icon_url", ""),
             "status": s["status"],
+            "assignee": s["assignee"],
             "progress": progress,
             "total_hours": s["total_hours"],
             "remaining_hours": s["effort"],
@@ -1357,47 +1359,28 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             continue
         epic_name = row
         epic_task_ids[epic_name] = task_id
-        # Compute epic date span, total effort, and progress from its stories
+        # Compute the epic date span from its stories. The page sets the points, remaining hours,
+        # progress and estimate flag of the epic row from the stories that are shown.
         epic_stories = [s for s in sorted_stories if s["epic"] == epic_name]
         epic_start = min(s["start"] for s in epic_stories)
         epic_end = max(s["end"] for s in epic_stories)
-        epic_effort = sum(s.get("effort", 0) for s in epic_stories)
-        effort_str = f"{epic_effort:.0f}h" if epic_effort == int(epic_effort) else f"{epic_effort:.1f}h"
-        # The total is partly a guess when an open story in the epic has no estimate
-        epic_unestimated = any(not st.get("estimated", True) and status_map.get(st["status"].lower(), 0) < 1.0
-                               for st in epic_stories)
-        if epic_unestimated:
-            effort_str += "?"
 
-        # Weighted average progress (by total_hours so done stories count fully)
-        total_weight = 0
-        weighted_progress = 0
-        for s in epic_stories:
-            status = s["status"].lower()
-            progress = status_map.get(status, 0)
-            weight = s.get("total_hours", 1)
-            weighted_progress += progress * weight
-            total_weight += weight
-        epic_progress = weighted_progress / total_weight if total_weight > 0 else 0
-
-        # The page sets the points and remaining hours of the epic row from the stories that are shown
         tasks.append({
             "id": task_id,
             "text": epic_name,
             "start_date": epic_start,
             "end_date": epic_end,
-            "effort": effort_str,
+            "effort": "",
             "status": "",
             "color": epic_color_map[epic_name],
             "type": "project",
             "open": True,
             "is_epic": True,
             "icon": ISSUE_TYPE_ICONS["epic"],
-            "unestimated": epic_unestimated,
             "icon_url": epic_icon_url,
             "story_key": epic_name_to_key.get(epic_name, ""),
             "due_date": epics_info.get(epic_name_to_key.get(epic_name, ""), {}).get("due", ""),
-            "progress": epic_progress,
+            "progress": 0,
             **(changes["epics"].get(epic_name, {}) if changes else {}),
         })
 
@@ -1414,8 +1397,9 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             if status:
                 unknown_statuses.add(s["status"])
 
-        effort = s.get("effort", 0)
-        effort_str = f"{effort:.0f}h" if effort == int(effort) else f"{effort:.1f}h"
+        # Rounded to one decimal, so the totals the page adds up for the epic row match the story rows
+        effort = round(s.get("effort", 0), 1)
+        effort_str = format_hours(effort)
         unestimated = not s.get("estimated", True) and progress < 1.0
         if unestimated:
             # The hours come from default_hours, because the story has no estimate in Jira
@@ -1429,8 +1413,9 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             "end_date": s["end"],
             "progress": progress,
             "points": format_points(s.get("points")),
-            "points_value": s.get("points") or 0,
+            "points_value": s.get("points"),
             "hours": effort,
+            "weight": s.get("total_hours", 1),  # weight of the story in the progress of its epic
             "sprint": sprint_number(s.get("sprint", "")),
             "sprint_name": s.get("sprint", ""),
             "effort": effort_str,
@@ -1474,6 +1459,9 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
                 "end_date": r["end"],
                 "progress": 0,
                 "effort": format_hours(r["remaining_hours"]),
+                "hours": round(r["remaining_hours"], 1),
+                # Snapshots from before assignees were stored have none, so the member filter hides them
+                "assignee": r.get("assignee", ""),
                 "status": r["status"],
                 "color": "#bbb",
                 "parent": group_id,
@@ -1676,6 +1664,7 @@ function movedText(task) {{
 function onShowChangesChange() {{
   showChanges = document.getElementById("show-changes").checked;
   gantt.render();
+  if (searchTerm) onSearchInput();
 }}
 gantt.config.date_format = "%Y-%m-%d";
 gantt.config.readonly = true;
@@ -1689,22 +1678,24 @@ gantt.config.columns = [
       var image = typeIconImages[task.icon_url];
       var icon = image ? "<img class='type-icon' src='" + image + "' alt=''>" :
         task.icon ? "<span class='type-icon'>" + task.icon + "</span>" : "";
-      var title = task.is_epic ? "<b>" + task.text + "</b>" : task.text;
-      return icon + "<span title='" + task.text.replace(/'/g, "&#39;") + "'>" + title + "</span>";
+      var text = escapeHtml(task.text);
+      var title = task.is_epic ? "<b>" + text + "</b>" : text;
+      return icon + "<span title='" + text + "'>" + title + "</span>";
     }} }},
-  {{name: "status", label: "Status", align: "left", width: 120, resize: true}},
+  {{name: "status", label: "Status", align: "left", width: 120, resize: true,
+    template: function(task) {{ return escapeHtml(task.status || ""); }} }},
   {{name: "points", label: "Points", align: "center", width: 70, resize: true,
     template: function(task) {{ return task.points || ""; }} }},
   {{name: "sprint", label: "Sprint", align: "center", width: 70, resize: true,
     template: function(task) {{
-      return task.sprint ? "<span title='" + task.sprint_name.replace(/'/g, "&#39;") + "'>" + task.sprint + "</span>" : "";
+      return task.sprint ? "<span title='" + escapeHtml(task.sprint_name) + "'>" + escapeHtml(task.sprint) + "</span>" : "";
     }} }},
   {{name: "effort", label: "Remaining", align: "center", width: 100, resize: true, template: effortText}}{moved_column}
 ];
 gantt.templates.tooltip_text = function(start, end, task) {{
   if (!task.text) return "";
   var fmt = gantt.date.date_to_str("%d %M %Y");
-  var text = "<b>" + task.text + "</b><br/>" + fmt(start) + " – " + fmt(gantt.date.add(end, -1, "day"));
+  var text = "<b>" + escapeHtml(task.text) + "</b><br/>" + fmt(start) + " – " + fmt(gantt.date.add(end, -1, "day"));
   if (task.roadmap) text += "<br/>No stories yet. The bar shows the start and due date of the epic in Jira.";
   if (task.unestimated) {{
     text += task.type === "project" || gantt.hasChild(task.id)
@@ -1804,35 +1795,46 @@ function isStoryShown(task) {{
   return !(hideDone && task.progress >= 1) && isMemberShown(task);
 }}
 function isTaskShown(task) {{
-  // Stories that left the plan have no assignee, so they are hidden while team members are selected
-  if (task.removed) return showChanges && selectedCount === 0;
+  if (task.removed && !showChanges) return false;
   if (!isFiltering()) return true;
   // An epic without stories has no team member
   if (task.roadmap) return selectedCount === 0;
-  if (task.is_epic) return !!epicHasShown[task.id];
+  // An epic, or the group of stories that are no longer in the plan
+  if (task.parent === gantt.config.root_id) return !!epicHasShown[task.id];
   return isStoryShown(task);
 }}
 gantt.attachEvent("onBeforeTaskDisplay", function(id, task) {{
   return isTaskShown(task);
 }});
+// Text from Jira, such as titles, statuses and names, is put into the page as HTML, so it is escaped first.
+function escapeHtml(text) {{
+  return String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}}
+// The same as format_hours in Python. The story hours are rounded to one decimal in Python,
+// so the sum only needs rounding for floating point errors.
 function formatHours(hours) {{
-  return Math.round(hours * 10) / 10 + "h";
+  var rounded = Math.round(hours * 10) / 10;
+  return (rounded === Math.round(rounded) ? rounded.toFixed(0) : rounded.toFixed(1)) + "h";
 }}
-// Rounded as format_points does in Python
+// The same as format_points in Python: "" when no story has points.
 function formatPoints(points) {{
-  return points ? String(Math.round(points * 100) / 100) : "";
+  return points === null ? "" : String(Math.round(points * 100) / 100);
 }}
-// Dates, remaining hours and points of the stories of an epic, in one pass.
-// The dates are of the stories that pass the filters, or null when none does. The hours and points
-// count the stories of the selected team members, done or not, so showing done stories does not change
-// them. A done story has no remaining hours.
+// Dates, remaining hours, points and progress of the stories of an epic, in one pass.
+// The dates are of the stories that pass the filters, or null when none does. The totals count the
+// stories of the selected team members, done or not, so showing done stories does not change them.
+// A done story has no remaining hours. The progress is weighted by the estimate of each story.
 function epicSummary(epicId) {{
-  var start = null, end = null, hours = 0, points = 0, guess = false;
+  var start = null, end = null, hours = 0, points = null, guess = false, weight = 0, done = 0;
   gantt.eachTask(function(child) {{
     if (!isMemberShown(child)) return;
     hours += child.hours || 0;
-    points += child.points_value || 0;
+    if (child.points_value != null) points = (points || 0) + child.points_value;
     if (child.unestimated) guess = true;
+    var w = child.weight == null ? 1 : child.weight;
+    weight += w;
+    done += child.progress * w;
     if (!isStoryShown(child)) return;
     if (!start || child.start_date < start) start = child.start_date;
     if (!end || child.end_date > end) end = child.end_date;
@@ -1841,6 +1843,7 @@ function epicSummary(epicId) {{
     dates: start ? {{ start_date: start, end_date: end }} : null,
     effort: formatHours(hours) + (guess ? "?" : ""),
     points: formatPoints(points),
+    progress: weight > 0 ? done / weight : 0,
     unestimated: guess,
   }};
 }}
@@ -1902,7 +1905,7 @@ function applyFilters() {{
   hideDone = !document.getElementById("show-done").checked;
   document.getElementById("member-clear").style.display = selectedCount ? "" : "none";
   gantt.eachTask(function(task) {{
-    if (task.parent !== gantt.config.root_id || task.removed || task.roadmap) return;
+    if (task.parent !== gantt.config.root_id || task.roadmap) return;
     if (!epicDates[task.id]) epicDates[task.id] = {{ start_date: task.start_date, end_date: task.end_date }};
     if (!epicChanges[task.id]) {{
       epicChanges[task.id] = {{ moved_days: task.moved_days, base_start: task.base_start, base_end: task.base_end }};
@@ -1917,6 +1920,7 @@ function applyFilters() {{
     // The totals of the epic row count only the stories of the selected team members
     task.effort = summary.effort;
     task.points = summary.points;
+    task.progress = summary.progress;
     task.unestimated = summary.unestimated;
     // The baseline of an epic is of all its stories, so it is left out while team members are selected
     var changes = selectedCount ? {{}} : epicChanges[task.id];
@@ -1927,6 +1931,8 @@ function applyFilters() {{
   updateMemberCounts();
   zoomToFit();
   gantt.render();
+  // The search only finds the stories that are shown
+  if (searchTerm) onSearchInput();
 }}
 function shownDates() {{
   var start = null, end = null;
@@ -2025,6 +2031,8 @@ function onSearchInput() {{
   var firstMatchId = null;
   var matchCount = 0;
   gantt.eachTask(function(task) {{
+    // Stories hidden by the filters are not searched
+    if (!isTaskShown(task)) return;
     var hay = ((task.text || "") + " " + (task.story_key || "")).toLowerCase();
     if (hay.indexOf(raw) !== -1) {{
       searchMatchIds[task.id] = true;
@@ -2044,12 +2052,12 @@ function onSearchInput() {{
   if (firstMatchId !== null) gantt.showTask(firstMatchId);
 }}
 gantt.templates.task_text = function(start, end, task) {{
-  if (task.removed || task.roadmap) return task.text;
-  return task.text + " " + Math.round(task.progress * 100) + "%";
+  if (task.removed || task.roadmap) return escapeHtml(task.text);
+  return escapeHtml(task.text) + " " + Math.round(task.progress * 100) + "%";
 }};
 gantt.templates.rightside_text = function(start, end, task) {{
   var parts = [];
-  if (task.assignee) parts.push(task.assignee);
+  if (task.assignee) parts.push(escapeHtml(task.assignee));
   parts.push(gantt.date.date_to_str("%d %M")(end));
   return "<span style='font-size:11px;color:#666;'>" + parts.join(" \u2022 ") + "</span>";
 }};

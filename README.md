@@ -121,8 +121,9 @@ How the planning works:
 In the chart you can zoom, search for a story and show or hide done stories. Done stories are hidden
 at first. Click a team member badge above the table to show only the stories of that member. You can
 select more than one member, and "Unassigned". The epic rows then show the points and remaining hours
-of the stories of those members, done or not, and the "No longer in the plan" group and the baseline
-of the epics are hidden. The Points and Sprint columns show the story points and the last sprint of
+of the stories of those members, done or not, and the baseline of the epics is hidden. "No longer in
+the plan" shows only the stories of those members. Snapshots made before this version have no
+assignees, so their removed stories are hidden while members are selected. The Points and Sprint columns show the story points and the last sprint of
 each story. For a sprint name that ends in "Sprint" and a number, such as "DTIC Sprint 26", only the
 number is shown. Click a bar to open the story in Jira. The buttons in the Story column header collapse or
 expand all epics. Each title in the Story column starts with the icon of its Jira issue type. The
