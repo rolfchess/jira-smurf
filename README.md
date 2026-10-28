@@ -131,7 +131,8 @@ assignees, so their removed stories are hidden while members are selected. The P
 each story. For an open story, this is its active or future sprint. A story that only has closed
 sprints is back in the backlog, so it has no sprint. A done story shows the sprint it was finished in. For a sprint name that ends in "Sprint" and a number, such as "DTIC Sprint 26", only the
 number is shown. The Sprint list in the toolbar shows only the stories of one sprint, and only the
-epics that have stories in it. It works together with the team member badges, and the epic rows then
+epics that have stories in it. While done stories are hidden, the list has only the sprints of open stories,
+so closed sprints are listed only when done stories are shown. It works together with the team member badges, and the epic rows then
 count only the stories of that sprint. "No longer in the plan" is hidden while a sprint is selected,
 because snapshots have no sprints. Next to each story bar are its assignee, its last planned day and its age, for example `12d old`.
 The age is the number of weekdays from the day the story was created in Jira up to today. Holidays

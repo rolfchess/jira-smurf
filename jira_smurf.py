@@ -1971,10 +1971,13 @@ function buildMemberFilter() {{
 }}
 // One option per sprint number of the stories, lowest first, and "No sprint" last when a story has none.
 // The values start with "s:", so a sprint cannot be mistaken for "all" or "none".
-function buildSprintFilter() {{
+// Only stories that pass the done filter count, because a done story keeps the closed sprint it was
+// finished in, and such a sprint would show no stories while done stories are hidden. The selected
+// sprint stays selected while it is in the list, otherwise the list goes back to "All sprints".
+function updateSprintFilter() {{
   var seen = {{}}, noSprint = false;
   gantt.eachTask(function(task) {{
-    if (task.removed || task.is_epic) return;
+    if (task.removed || task.is_epic || (hideDone && task.progress >= 1)) return;
     if (task.sprint) seen[task.sprint] = true; else noSprint = true;
   }});
   var sprints = Object.keys(seen).sort(function(a, b) {{
@@ -1984,6 +1987,8 @@ function buildSprintFilter() {{
     return a.localeCompare(b);
   }});
   var select = document.getElementById("sprint-filter");
+  var current = select.value;
+  select.innerHTML = "";
   function add(value, label) {{
     var option = document.createElement("option");
     option.value = value;
@@ -1993,9 +1998,12 @@ function buildSprintFilter() {{
   add("all", "All sprints");
   sprints.forEach(function(sprint) {{ add("s:" + sprint, sprint); }});
   if (noSprint) add("none", "No sprint");
+  select.value = current;
+  if (select.value !== current || !current) select.value = "all";
 }}
 function applyFilters() {{
   hideDone = !document.getElementById("show-done").checked;
+  updateSprintFilter();
   var sprint = document.getElementById("sprint-filter").value;
   selectedSprint = sprint === "all" ? null : sprint === "none" ? "" : sprint.slice(2);
   document.getElementById("member-clear").style.display = selectedCount ? "" : "none";
@@ -2249,7 +2257,6 @@ gantt.addMarker({{ start_date: new Date(), css: "today-marker", text: "Today" }}
 }})();
 gantt.parse({{ data: {tasks_json}, links: {links_json} }});
 buildMemberFilter();
-buildSprintFilter();
 applyFilters();
 (function() {{
   var svg = document.getElementById("trend-svg");
