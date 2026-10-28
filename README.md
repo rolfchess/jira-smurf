@@ -74,7 +74,7 @@ example.
 | Setting                  | Description                                                                                                                                                                    |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `start_date`             | First day of the planning, `YYYY-MM-DD`.                                                                                                                                       |
-| `default_hours`          | Hours for a story without story points.                                                                                                                                        |
+| `default_hours`          | Hours for a story without story points. This can be 0.                                                                                                                              |
 | `velocity`               | Hours per story point.                                                                                                                                                         |
 | `include_open_sprints`   | `true` also adds all stories in the active sprint.                                                                                                                             |
 | `include_future_sprints` | `true` also adds all stories in future sprints.                                                                                                                                |
@@ -106,8 +106,10 @@ How the planning works:
   to `[team]` to plan them with their real hours.
 - A done story keeps its assignee from Jira. It does not use the hours of anyone in the team.
 - Remaining work is the estimate times (1 minus the progress of the status).
-- A story without story points gets `default_hours`. Its remaining hours have a question mark, for
-  example `40h?`. The total of its epic has a question mark too.
+- A story without story points gets `default_hours`. Its Points cell has a yellow badge with a dash,
+  and its remaining hours are in a yellow badge. The remaining hours of its epic are in a yellow badge
+  too. With `default_hours = 0`, such a story has 0 remaining hours and a bar of one day. The
+  next story of the same person starts the day after it.
 - The duration of an epic depends only on its stories. The epic starts with its first story and ends
   with its last story. Its remaining hours are the sum of the remaining hours of its stories. Story
   points set on the epic itself are ignored.

@@ -277,8 +277,9 @@ def load_gantt_config(path="gantt.toml"):
 
     # Global scheduling settings
     default_hours = raw.get("default_hours", 40)
-    if default_hours <= 0:
-        print(f"Error: 'default_hours' must be > 0", file=sys.stderr)
+    # 0 plans stories without story points as one-day bars that take no hours
+    if default_hours < 0:
+        print(f"Error: 'default_hours' must be 0 or more", file=sys.stderr)
         sys.exit(1)
     velocity = raw.get("velocity", 8.0)
     if velocity <= 0:
@@ -1404,10 +1405,8 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
         # Rounded to one decimal, so the totals the page adds up for the epic row match the story rows
         effort = round(s.get("effort", 0), 1)
         effort_str = format_hours(effort)
+        # The hours come from default_hours, because the story has no estimate in Jira. The page shows them in a badge.
         unestimated = not s.get("estimated", True) and progress < 1.0
-        if unestimated:
-            # The hours come from default_hours, because the story has no estimate in Jira
-            effort_str += "?"
 
         tasks.append({
             "id": task_id,
@@ -1621,6 +1620,10 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 700; line-height: 16px;
     text-transform: uppercase; vertical-align: middle; white-space: nowrap;
   }}
+  .no-estimate {{
+    display: inline-block; min-width: 18px; padding: 0 6px; border-radius: 3px; line-height: 18px;
+    background: #fff0b3; color: #7a5d00; font-weight: 600;
+  }}
   .status-badge.todo {{ background: #dfe1e6; color: #42526e; }}
   .status-badge.doing {{ background: #deebff; color: #0747a6; }}
   .status-badge.done {{ background: #e3fcef; color: #006644; }}
@@ -1666,10 +1669,17 @@ function signed(value, unit) {{
   return (value > 0 ? "+" : "\u2212") + number + unit;
 }}
 // Remaining hours, followed by the change of the estimate since the baseline.
+// Hours that include default_hours for a story without story points are shown in a yellow badge.
 function effortText(task) {{
-  if (!showChanges || !task.hours_delta) return task.effort;
+  var effort = task.unestimated ? "<span class='no-estimate'>" + task.effort + "</span>" : task.effort;
+  if (!showChanges || !task.hours_delta) return effort;
   var cls = task.hours_delta > 0 ? "delta-up" : "delta-down";
-  return task.effort + " <span class='" + cls + "'>" + signed(task.hours_delta, "h") + "</span>";
+  return effort + " <span class='" + cls + "'>" + signed(task.hours_delta, "h") + "</span>";
+}}
+// The points of a task, or a yellow badge with a dash for a story without story points.
+function pointsText(task) {{
+  if (task.is_epic || task.removed || task.points_value != null) return task.points || "";
+  return "<span class='no-estimate' title='No story points in Jira'>–</span>";
 }}
 // "NEW" for a story that is not in the baseline, or the working days its end date moved.
 function movedText(task) {{
@@ -1717,7 +1727,7 @@ gantt.config.columns = [
     }} }},
   {{name: "status", label: "Status", align: "left", width: 120, resize: true, template: statusBadge}},
   {{name: "points", label: "Points", align: "center", width: 70, resize: true,
-    template: function(task) {{ return task.points || ""; }} }},
+    template: pointsText}},
   {{name: "sprint", label: "Sprint", align: "center", width: 70, resize: true,
     template: function(task) {{
       return task.sprint ? "<span title='" + escapeHtml(task.sprint_name) + "'>" + escapeHtml(task.sprint) + "</span>" : "";
@@ -1885,7 +1895,7 @@ function epicSummary(epicId) {{
   }}, epicId);
   return {{
     dates: start ? {{ start_date: start, end_date: end }} : null,
-    effort: formatHours(hours) + (guess ? "?" : ""),
+    effort: formatHours(hours),
     points: formatPoints(points),
     progress: weight > 0 ? done / weight : 0,
     unestimated: guess,
