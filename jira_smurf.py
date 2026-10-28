@@ -429,6 +429,25 @@ def fetch_backlog_order(story_keys):
     return positions
 
 
+def fetch_finished_stories(start, end):
+    """Fetch the stories of the project that moved to a done status from start up to end (not included)."""
+    jql = (f'project = {JIRA_PROJECT} AND issuetype = Story AND statusCategory = Done '
+           f'AND statusCategoryChangedDate >= "{start}" AND statusCategoryChangedDate < "{end}" ORDER BY key ASC')
+    fields = f"summary,assignee,statuscategorychangedate,{STORY_POINTS_FIELD},customfield_10028"
+    issues = []
+    next_page_token = None
+    while True:
+        params = {"jql": jql, "fields": fields, "maxResults": PAGE_SIZE}
+        if next_page_token:
+            params["nextPageToken"] = next_page_token
+        data = jira_get("search/jql", params=params)
+        issues.extend(data["issues"])
+        next_page_token = data.get("nextPageToken")
+        if not next_page_token:
+            break
+    return issues
+
+
 def fetch_sprint_stories(include_open, include_future):
     """Fetch the project's stories in open sprints, future sprints or both."""
     sprint_functions = []
@@ -2098,6 +2117,66 @@ def run_gantt(config_path, history_dir=None, since=None):
                      changes, snapshots, icon_images, epic_icon_url, epics_info, roadmap_epics, config.epics)
 
 
+def run_velocity(config_path, weeks):
+    """Print the hours per story point of the team in each of the last full weeks, and in total.
+
+    The hours are the team hours from the configuration file, without days off and holidays.
+    The points are those of stories assigned to a team member that moved to a done status.
+    """
+    config = load_gantt_config(config_path)
+    end = date.today() - timedelta(days=date.today().weekday())  # Monday of the current week
+    start = end - timedelta(weeks=weeks)
+
+    print(f"Fetching the stories finished from {start} to {end - timedelta(days=1)}...", file=sys.stderr)
+    week_starts = [start + timedelta(weeks=i) for i in range(weeks)]
+    points = {w: 0.0 for w in week_starts}
+    unpointed = {w: 0 for w in week_starts}
+    for issue in fetch_finished_stories(start, end):
+        fields = issue["fields"]
+        if get_assignee(fields) not in config.team:
+            continue
+        done = date.fromisoformat((fields.get("statuscategorychangedate") or "")[:10] or start.isoformat())
+        week = done - timedelta(days=done.weekday())
+        if week not in points:
+            continue
+        story_points = get_story_points_numeric(fields)
+        if story_points is None:
+            unpointed[week] += 1
+        else:
+            points[week] += story_points
+
+    def team_hours(first_day):
+        return sum(hours_on(first_day + timedelta(days=i), avail)
+                   for avail in config.team.values() for i in range(7))
+
+    def ratio(hours, pts):
+        return f"{hours / pts:.1f}" if pts else "-"
+
+    print(f"{'Week':<10}  {'Hours':>6}  {'Points':>6}  {'Hours/point':>11}  {'No points':>9}")
+    total_hours = total_points = total_unpointed = 0
+    for week in week_starts:
+        hours = team_hours(week)
+        iso_year, iso_week, _ = week.isocalendar()
+        label = f"{iso_year}-W{iso_week:02d}"
+        print(f"{label:<10}  {hours:>6g}  {points[week]:>6g}  {ratio(hours, points[week]):>11}  "
+              f"{unpointed[week]:>9}")
+        total_hours += hours
+        total_points += points[week]
+        total_unpointed += unpointed[week]
+    print(f"{'Total':<10}  {total_hours:>6g}  {total_points:>6g}  {ratio(total_hours, total_points):>11}  "
+          f"{total_unpointed:>9}")
+    print()
+    if total_points:
+        print(f"Velocity over the last {weeks} weeks: {total_hours / total_points:.1f} hours per story point. "
+              f"{config_path} uses {config.velocity}.")
+    else:
+        print(f"No stories with story points were finished in the last {weeks} weeks.")
+    if total_unpointed:
+        stories, their = ("story had", "Its") if total_unpointed == 1 else ("stories had", "Their")
+        print(f"{total_unpointed} finished {stories} no story points. {their} work is in the hours but not "
+              f"in the points, so the real hours per story point are lower than shown.")
+
+
 def run_export(fmt):
     """Fetch all stories of the project and print them as CSV or as an HTML table."""
     print(f"Fetching stories from {JIRA_PROJECT}...", file=sys.stderr)
@@ -2208,6 +2287,12 @@ def build_parser():
                               help="show the changes since the latest snapshot on or before this date; "
                                    "without a date, since the latest snapshot before the current day")
 
+    velocity_parser = subparsers.add_parser("velocity", help="measure the hours per story point of the last weeks")
+    velocity_parser.add_argument("-c", "--config", metavar="FILE", default="gantt.toml",
+                                 help="planning configuration with the team (default: gantt.toml)")
+    velocity_parser.add_argument("--weeks", metavar="N", type=int, default=8,
+                                 help="number of full weeks to look back, not counting the current week (default: 8)")
+
     subparsers.add_parser("fields", help="list the numeric fields of one story, to find the story points field")
     return parser
 
@@ -2217,10 +2302,15 @@ def main():
     args = parser.parse_args()
     if getattr(args, "since", None) and not args.history:
         parser.error("--since needs --history")
+    if args.command == "velocity" and args.weeks < 1:
+        parser.error("--weeks must be 1 or more")
     validate_config()
 
     if args.command == "fields":
         discover_fields()
+        return
+    if args.command == "velocity":
+        run_velocity(args.config, args.weeks)
         return
 
     output = open(args.output, "w", encoding="utf-8", newline="") if args.output else sys.stdout

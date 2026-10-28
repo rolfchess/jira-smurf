@@ -44,6 +44,8 @@ python jira_smurf.py gantt -o gantt.html --history plannings                    
 python jira_smurf.py gantt -o gantt.html --history plannings --since            # also show changes since the last run
 python jira_smurf.py gantt -o gantt.html --history plannings --since 2026-10-01 # also show changes since a date
 python jira_smurf.py fields                     # find the story points field
+python jira_smurf.py velocity                   # measure the hours per story point of the last 8 weeks
+python jira_smurf.py velocity --weeks 4
 python jira_smurf.py --help
 ```
 
@@ -119,6 +121,19 @@ The checkbox "Show changes since …" in the toolbar turns these marks on and of
 Below the chart, a summary shows how far the plan end moved and why: new stories, changed estimates, stories that left the plan and late stories.
 
 With two or more snapshots, a trend chart shows the planned end of each epic at each run. A flat line means the end date did not move. A rising line means it moved later.
+
+## Measure the velocity
+
+`python jira_smurf.py velocity` measures the real hours per story point of your team. It looks at the last 8 full weeks, Monday to Sunday, without the current week. With `--weeks N` it looks at the last N weeks.
+
+For each week, it adds up:
+
+- the team hours from `gantt.toml`, without days off and holidays;
+- the story points of the stories that moved to a done status in that week and are assigned to a team member.
+
+The hours divided by the points give the velocity. Use the total as `velocity` in `gantt.toml`. The weekly numbers show how much it varies.
+
+The result is less exact when the team changed during the period, because `gantt.toml` describes the team as it is now. All other work, such as meetings and bugs without points, counts in the hours. A story counts in full in the week it was finished.
 
 ## Notes
 
