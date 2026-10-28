@@ -1420,7 +1420,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   .gantt_task_line.task-done {{ opacity: 0.45; filter: grayscale(60%); }}
   .gantt_task_line.task-done .gantt_task_content {{ text-decoration: line-through; }}
   .gantt_row.task-done-row {{ color: #999; }}
-  .gantt_task_line .gantt_task_progress {{ opacity: 0.35; }}
+  .gantt_task_line .gantt_task_progress {{ background: rgba(0, 0, 0, 0.3); }}
   #mouse-ruler {{ position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(0,0,0,0.25); pointer-events: none; z-index: 999; display: none; }}
   .weekend {{ background: #f0f0f0; }}
   .today-marker .gantt_marker_content {{ background: #e33; color: #fff; font-size: 11px; padding: 2px 6px; }}
