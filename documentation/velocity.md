@@ -1,22 +1,39 @@
 # Velocity: how fast does the team really work?
 
-Every planning starts with the same question: when will it be done? To answer that, you need to know
-how much work there is, and how fast the team works. The first part is in Jira. The second part is
-the velocity. If the velocity is wrong, every date in the planning is wrong, no matter how pretty
-the Gantt chart looks.
+In our project, the planning kept sliding. New stories and bugs came in, and stories took longer
+than we thought. I wanted to see where the time went, so I wrote this tool.
 
-## What is velocity?
+To be able to tell when the project (or an epic) will be done, we need to know how fast the team
+moves through the work, and we need an estimate of all the work. The estimates are the points on a
+story and they don't need to be exact. You can do T-shirt sizing (Large Medium Small) or do the
+classic Fibonacci sequence 1, 3, 5, 8 points etc. Don't spend too long on estimating, because
+stories need to be small, and many small stories average out the errors.
 
-Story points say how big a story is. They do not say how long it takes. Velocity is the number that
-turns points into time.
+The speed of the team is called "Velocity" in scrum and is typically expressed as Points per Hour,
+but since most teams spend more hours per point, this tool calculates Velocity as "Hours per Point".
+So a Velocity of 8 in this tool means 1 point takes 8 hours to complete.
 
-Many teams count velocity as points per sprint. This tool counts it the other way around: **hours
-per story point**. With a velocity of 7, a story of 5 points takes 5 × 7 = 35 hours of team time.
+Or: With a velocity of 7, a story of 5 points takes 5 × 7 = 35 hours of team time.
 
-The planner uses this number for every story. So if the velocity is 7 but the team really needs 9
-hours per point, every story gets too few hours in the plan, and the end date is too early.
+To calculate the number of hours a story will take to complete, this tool:
 
-## How this tool measures it
+1. Uses the points in the story
+2. Multiplies that with the Velocity in the config file
+3. Assigns those hours to the next availabe resource.
+
+If a story has no points, the tool uses the `default_hours` setting from the config as the number of
+expected hours in the story.
+
+This is all done in the order in which the backlog is sorted. Top stories first, bottom stories
+later. It does this for all stories, and this should give you a good indication of what the team
+will be doing the coming weeks/months, and when stuff will be done.
+
+## But the Velocity is configuration, how do I know the actual velocity?
+
+This tool can measure the actual Velocity of a project based on the story points of stories that
+have moved to "Done", and determining the number of available hours of the team during that period.
+It does this over a period of 8 weeks (if available), give you the velocity per week, and the
+overall velocity over 8 weeks:
 
 Run this:
 
@@ -24,15 +41,8 @@ Run this:
 python jira_smurf.py velocity
 ```
 
-The tool looks at the last 8 full weeks. For each week it does a simple sum:
-
-- **Hours:** the hours of everyone in `[team]` in `gantt.toml`, minus days off and holidays.
-- **Points:** the story points of the stories that moved to a done status that week, such as Done or
-  Closed, if they are assigned to someone in the team.
-- **Velocity:** hours ÷ points.
-
-Here is an example. Three people are available 8 hours a day, 5 days a week. That is 3 × 8 × 5 = 120
-hours.
+The output could look somewhat like this for a team of three people which are available 8 hours a
+day, 5 days a week. That is 3 × 8 × 5 = 120 hours.
 
 | Week   | Hours | Points done | Hours per point |
 | ------ | ----- | ----------- | --------------- |
@@ -40,34 +50,37 @@ hours.
 | Week 2 | 120   | 10          | 120 ÷ 10 = 12   |
 | Total  | 240   | 25          | 240 ÷ 25 = 9.6  |
 
-One week says 8, the next says 12. Neither is wrong, but neither is the whole truth. The total over
-all weeks is the number to use. Put it in `gantt.toml` as `velocity`.
+One week says 8, the next says 12. For the planning, use the total over all weeks. Put it in
+`gantt.toml` as `velocity`.
 
-Note that the hours include everything the team does: meetings, support, bugs, coffee. That is on
-purpose. The plan has to make room for that work too.
+Note that the hours include everything the team does: meetings, support, bugs, coffee, unplanned
+days off. That is on purpose. The plan has to make room for all the things a team does next to the
+stories in the sprint. There is always some housekeeping and stuff you can't anticipate or estimate.
 
 ### Hours are availability
 
-This tool ignores all hours written in Jira, so you do not have to write them. In our experience,
-writing hours in Jira does not make the planning more predictable. The hours in `[team]` are the
-availability: how many hours each person is available for the project on each day of the week. The
+This tool ignores all hours written in Jira, so you do not have to bother writing them. In our
+experience, writing hours in Jira does not make the planning more predictable and only makes the
+administration more cumbersome and drains the energy of people who would rather do something else.
+
+Instead, we can configure availability of people in the `[team]` section of the configuration. The
 tool assumes that people are there on those days. Sick days, a dentist visit or an evening of extra
-work make the real hours different. That error is accepted, because it ends up in the velocity.
+work make the real hours different. That error is accepted as a fact of life, and will be reflected
+in the calulated average velocity.
 
-It is tempting to make room for meetings by lowering the hours. For example, you could set 6 hours
-on Monday and Friday instead of 8. Don't do that. The velocity already includes meetings and all
-other work, because it is measured over all the hours. Lower hours only hide part of that work in a
-guess. And that guess never changes, while the velocity follows the real situation week by week.
-
-So keep the two apart:
+It is tempting to make room for meetings by lowering the available hours of team members. For
+example, you could set 6 hours on Monday and Friday instead of 8. **Don't do that**. It will pollute
+the velocity calculation because you are trying hide stuff under the carpet.
 
 - **Hours:** how many hours each person is available for the project. Change them only when the
   availability changes, for example for a person who works 4 days a week.
-- **Velocity:** how many of those hours one story point takes, with meetings and everything else
-  included.
+- **Velocity:** how many of those hours one story point takes, **with meetings and everything else
+  included**.
 
 The tool measures the past weeks with the hours in `gantt.toml` as they are now. So when you fix the
-hours, run `python jira_smurf.py velocity` again and use the new velocity.
+hours, run `python jira_smurf.py velocity` again and use the new velocity. Try to find the slowest
+moving average velocity (so the longest period you can use) and use that as configuration. Don't
+change it too often or too redical, it will make your planning unpredictable for everyone.
 
 ### Done means released
 
@@ -76,52 +89,27 @@ that the story is released. That is the moment the customer can use it, and the 
 work left on it.
 
 Do not move a story to Done when the code is merged or tested, but not yet released. There is still
-work left, and the customer has nothing yet. The velocity then looks better than it is, and the plan
-promises the customer dates that are too early. That is unfair to the customer.
+work left, and the customer has nothing yet. The velocity then might look better than it is, and
+**the plan promises dates that are too early**. That is unfair to the the customer and the team.
 
-This only works when the team releases often, ideally every story as soon as it is ready. That is
-normal these days. A team that releases once every five weeks cannot fix a zero-day security problem
-within an hour either.
+This only works when the team releases often, ideally every story as soon as it is ready. You will
+need to be able to do that anyway: A team that releases once every five weeks cannot fix a zero-day
+security problem within an hour either.
 
-## Why velocity jumps around
+To summarize:
 
-The sum is simple, but it can only be as good as the data in Jira. These are the usual causes of a
-velocity that jumps around:
+- Always give stories points
+- Move a story to Done when it is released, available to the customer and 0 work left for the team
+- Keep stories small. It is motivating for the team and will increase resolution and predictability
+- Assign the story to the person who is working on it
+- Don't change points during or after the work is done.
+- Don't change availability to compensate for meetings or other work the team is doing.
+- Never reopen a story. If you need to fix something, create a new story or bug.
+- Your velocity is not someone else's. A velocity is only relevant for your team and project and
+  says nothing about other projects and teams within a company.
+- Use the stories in daily standup, and always keep stories up to date when you work on them, don't
+  postpone administration to the end of the week.
 
-- **A story without points.** The team spent hours on it, but it adds 0 points. The velocity goes
-  up.
-- **A story that is moved to Done too late.** The tool uses the last day the story moved to a done
-  status. If the team closes a whole sprint of stories on Friday afternoon, all those points land in
-  one week.
-- **A big story.** A story of 13 points that took three weeks counts all 13 points in its last week.
-  The two weeks before it look slow, the last week looks fast.
-- **A wrong team.** If someone joins, leaves or goes on holiday and `gantt.toml` does not know, the
-  hours are wrong.
+If the data in Jira is clean, the velocity stays steady, and so do the dates in the planning.
 
-## Do's
-
-- **Give every story points before work starts.** Even a rough guess is better than nothing.
-- **Move a story to Done on the day it is released.** Do not move it earlier, and do not wait until
-  the end of the sprint or until after the demo. The date of that move is the only completion date
-  the tool knows.
-- **Keep stories small.** Small stories spread the points evenly over the weeks.
-- **Assign the story to the person who did the work.** Stories of people outside `[team]` do not
-  count.
-- **Keep `gantt.toml` up to date.** Add days off and holidays, and change `[team]` when the team
-  changes.
-- **Look at the total, not at one week.** One week is noise. Eight weeks is a trend.
-
-## Don'ts
-
-- **Don't change the points after the work is done** to match the time it took. The points say how
-  big the story was. The velocity says how fast the team was. If you change the points afterwards,
-  you hide the real velocity.
-- **Don't lower the hours in `gantt.toml` to make room for meetings.** The velocity already includes
-  them.
-- **Don't reopen a done story for a small fix.** When the story moves to Done again, its points move
-  to that later week. Make a new bug or story instead.
-- **Don't use velocity to compare people or teams.** Points mean something different in every team.
-  Velocity is a planning tool, not a score.
-
-Keep the data clean, and the velocity becomes a boring, steady number. Boring is exactly what you
-want from it.
+Cheers!
