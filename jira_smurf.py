@@ -499,6 +499,46 @@ def work_dates(status_changes, statuses, work_start_progress=0.0):
     return start, end
 
 
+def find_start_date_field():
+    """Return the id of the Jira field named "Start date", or None if there is none."""
+    try:
+        fields = jira_get("field")
+    except requests.RequestException:
+        return None
+    for field in fields:
+        if field.get("name", "").lower() == "start date" and (field.get("schema") or {}).get("type") == "date":
+            return field["id"]
+    return None
+
+
+def fetch_epics(epic_keys, start_date_field=None):
+    """Return {epic key: {key, name, start, due}} for the given epics.
+
+    start and due are YYYY-MM-DD strings, or "" when the epic has no such date in Jira.
+    """
+    fields = "summary,duedate" + (f",{start_date_field}" if start_date_field else "")
+    jql = f"key in ({', '.join(epic_keys)})"
+    epics = {}
+    next_page_token = None
+    while True:
+        params = {"jql": jql, "fields": fields, "maxResults": PAGE_SIZE}
+        if next_page_token:
+            params["nextPageToken"] = next_page_token
+        data = jira_get("search/jql", params=params)
+        for issue in data["issues"]:
+            f = issue["fields"]
+            epics[issue["key"]] = {
+                "key": issue["key"],
+                "name": f.get("summary") or issue["key"],
+                "start": (f.get(start_date_field) or "")[:10] if start_date_field else "",
+                "due": (f.get("duedate") or "")[:10],
+            }
+        next_page_token = data.get("nextPageToken")
+        if not next_page_token:
+            break
+    return epics
+
+
 def find_epic_icon_url(issues):
     """Return the address of the Epic issue type icon, or "" if Jira has none."""
     # In team-managed projects the parent of a story is its epic, with its issue type
@@ -1126,21 +1166,23 @@ EPIC_COLORS = [
 
 
 def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=(), status_colors=None,
-                     changes=None, snapshots=(), icon_images=None, epic_icon_url=""):
+                     changes=None, snapshots=(), icon_images=None, epic_icon_url="",
+                     epics_info=None, roadmap_epics=(), epic_order=()):
     """Write a self-contained HTML file with a DHTMLX Gantt chart.
 
     With changes (from compare_plans), the chart can mark what changed since the baseline.
     With two or more snapshots, a trend chart of the planned end dates is added below it.
     icon_images is {icon address: data URI} for the issue type icons from Jira. A type
     without an image there is shown with an emoji.
+    epics_info is {epic key: {key, name, start, due}} from fetch_epics. roadmap_epics lists
+    epics without stories; each is shown as a striped bar from its start to its due date.
+    epic_order is the list of epic keys in the order of the configuration file.
     """
     # Assign colors to epics
     epics_seen = []
     for s in scheduled_stories:
         if s["epic"] not in epics_seen:
             epics_seen.append(s["epic"])
-    epic_color_map = {epic: EPIC_COLORS[i % len(EPIC_COLORS)] for i, epic in enumerate(epics_seen)}
-
     # Sort: epic order, done stories first, then by start date
     def story_sort_key(s):
         epic_order = epics_seen.index(s["epic"])
@@ -1163,9 +1205,43 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
         if s["epic"] not in epic_name_to_key and s.get("epic_key"):
             epic_name_to_key[s["epic"]] = s["epic_key"]
 
+    # Order of the epic rows: the epics of the configuration file in its order, then the others
+    epics_info = epics_info or {}
+    roadmap_by_key = {r["key"]: r for r in roadmap_epics}
+    key_to_name = {key: name for name, key in epic_name_to_key.items()}
+    epic_rows = []
+    for key in epic_order:
+        if key in key_to_name and ("stories", key_to_name[key]) not in epic_rows:
+            epic_rows.append(("stories", key_to_name[key]))
+        elif key in roadmap_by_key:
+            epic_rows.append(("roadmap", roadmap_by_key[key]))
+    epic_rows += [("stories", name) for name in epics_seen if ("stories", name) not in epic_rows]
+    row_names = [row if kind == "stories" else row["name"] for kind, row in epic_rows]
+    epic_color_map = {name: EPIC_COLORS[i % len(EPIC_COLORS)] for i, name in enumerate(row_names)}
+
     # Create a parent task per epic
-    for epic_name in epics_seen:
+    for kind, row in epic_rows:
         task_id += 1
+        if kind == "roadmap":
+            # An epic without stories is shown as a striped bar from its start date to its due date in Jira
+            first, last = row["start"] or row["due"], row["due"] or row["start"]
+            tasks.append({
+                "id": task_id,
+                "text": row["name"],
+                "start_date": first,
+                "end_date": (date.fromisoformat(last) + timedelta(days=1)).isoformat(),
+                "effort": "",
+                "status": "",
+                "color": epic_color_map[row["name"]],
+                "icon": ISSUE_TYPE_ICONS["epic"],
+                "icon_url": epic_icon_url,
+                "story_key": row["key"],
+                "progress": 0,
+                "roadmap": True,
+                "due_date": row["due"],
+            })
+            continue
+        epic_name = row
         epic_task_ids[epic_name] = task_id
         # Compute epic date span, total effort, and progress from its stories
         epic_stories = [s for s in sorted_stories if s["epic"] == epic_name]
@@ -1204,6 +1280,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             "unestimated": epic_unestimated,
             "icon_url": epic_icon_url,
             "story_key": epic_name_to_key.get(epic_name, ""),
+            "due_date": epics_info.get(epic_name_to_key.get(epic_name, ""), {}).get("due", ""),
             "progress": epic_progress,
             **(changes["epics"].get(epic_name, {}) if changes else {}),
         })
@@ -1372,6 +1449,8 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   .gantt_row.change-new-row, .gantt_task_row.change-new-row {{ background: #fff3bf; }}
   .gantt_row.change-removed-row {{ color: #999; text-decoration: line-through; }}
   .gantt_task_line.change-removed {{ opacity: 0.5; }}
+  .gantt_task_line.roadmap-epic {{ opacity: 0.75;
+    background-image: repeating-linear-gradient(45deg, rgba(255,255,255,0.45) 0 6px, transparent 6px 12px); }}
   .gantt_task_line.change-late {{ box-shadow: 0 0 0 2px #d62728; }}
   .delta-up {{ color: #c62828; font-weight: 600; }}
   .delta-down {{ color: #2e7d32; font-weight: 600; }}
@@ -1477,6 +1556,7 @@ gantt.templates.tooltip_text = function(start, end, task) {{
   if (!task.text) return "";
   var fmt = gantt.date.date_to_str("%d %M %Y");
   var text = "<b>" + task.text + "</b><br/>" + fmt(start) + " – " + fmt(gantt.date.add(end, -1, "day"));
+  if (task.roadmap) text += "<br/>No stories yet. The bar shows the start and due date of the epic in Jira.";
   if (task.unestimated) {{
     text += task.type === "project" || gantt.hasChild(task.id)
       ? "<br/>Some stories have no estimate in Jira, so the default hours are used for them"
@@ -1581,7 +1661,7 @@ gantt.attachEvent("onBeforeTaskDisplay", function(id, task) {{
 function onShowDoneChange() {{
   hideDone = !document.getElementById("show-done").checked;
   gantt.eachTask(function(task) {{
-    if (task.parent !== gantt.config.root_id || task.removed) return;
+    if (task.parent !== gantt.config.root_id || task.removed || task.roadmap) return;
     if (!epicDates[task.id]) epicDates[task.id] = {{ start_date: task.start_date, end_date: task.end_date }};
     var dates = hideDone ? openStoryDates(task.id) : null;
     // A "project" task takes its dates from all its children, so use a plain task while done stories are hidden.
@@ -1645,7 +1725,8 @@ function joinClasses() {{
   return Array.prototype.filter.call(arguments, Boolean).join(" ");
 }}
 gantt.templates.task_class = function(start, end, task) {{
-  var base = (task.progress >= 1 ? "clickable-task task-done" : "clickable-task") + changeBarClass(task);
+  var base = (task.progress >= 1 ? "clickable-task task-done" : "clickable-task") + changeBarClass(task) +
+    (task.roadmap ? " roadmap-epic" : "");
   if (!searchTerm) return base;
   if (searchMatchIds[task.id]) return base + " search-match";
   if (searchVisibleIds[task.id]) return base;
@@ -1698,7 +1779,7 @@ function onSearchInput() {{
   if (firstMatchId !== null) gantt.showTask(firstMatchId);
 }}
 gantt.templates.task_text = function(start, end, task) {{
-  if (task.removed) return task.text;
+  if (task.removed || task.roadmap) return task.text;
   return task.text + " " + Math.round(task.progress * 100) + "%";
 }};
 gantt.templates.rightside_text = function(start, end, task) {{
@@ -1861,11 +1942,12 @@ def run_gantt(config_path, history_dir=None, since=None):
     # Expand epics into stories
     ordered_keys = []
     story_data = {}
+    empty_epics = []
     for epic_key in config.epics:
         print(f"Fetching stories for epic {epic_key}...", file=sys.stderr)
         epic_issues = fetch_stories_for_epic(epic_key)
         if not epic_issues:
-            print(f"Warning: epic {epic_key} has 0 stories, skipping", file=sys.stderr)
+            empty_epics.append(epic_key)
             continue
         print(f"  Found {len(epic_issues)} stories in {epic_key}", file=sys.stderr)
         for issue in epic_issues:
@@ -1982,6 +2064,24 @@ def run_gantt(config_path, history_dir=None, since=None):
                 r["issue_type"] = issue_type.get("name", "")
                 r["issue_type_icon_url"] = issue_type.get("iconUrl", "")
 
+    # Read the start and due dates of the epics. An epic without stories is shown with these dates.
+    epic_keys = list(dict.fromkeys(list(config.epics) + [s["epic_key"] for s in scheduled if s.get("epic_key")]))
+    epics_info = {}
+    if epic_keys:
+        print(f"Fetching the dates of {len(epic_keys)} epics...", file=sys.stderr)
+        epics_info = fetch_epics(epic_keys, find_start_date_field())
+    roadmap_epics = []
+    for key in empty_epics:
+        info = epics_info.get(key)
+        if not info or not (info["start"] or info["due"]):
+            print(f"Warning: epic {key} has no stories and no start or due date, skipping", file=sys.stderr)
+            continue
+        if info["start"] and info["due"] and info["start"] > info["due"]:
+            print(f"Warning: epic {key} starts after its due date, showing only its due date", file=sys.stderr)
+            info = dict(info, start=info["due"])
+        print(f"  Epic {key} has no stories yet, showing its dates from Jira", file=sys.stderr)
+        roadmap_epics.append(info)
+
     # Put the Jira issue type icons into the page, so it shows them without a Jira login
     epic_icon_url = find_epic_icon_url(story_data.values())
     icon_urls = [s["issue_type_icon_url"] for s in scheduled if s["issue_type_icon_url"]]
@@ -1995,7 +2095,7 @@ def run_gantt(config_path, history_dir=None, since=None):
         icon_images = fetch_icon_images(icon_urls)
 
     write_gantt_html(scheduled, config.statuses, config.dependencies, config.holidays, config.status_colors,
-                     changes, snapshots, icon_images, epic_icon_url)
+                     changes, snapshots, icon_images, epic_icon_url, epics_info, roadmap_epics, config.epics)
 
 
 def run_export(fmt):

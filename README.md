@@ -91,6 +91,7 @@ How the planning works:
 - Remaining work is the estimate times (1 minus the progress of the status).
 - A story without story points gets `default_hours`. Its remaining hours have a question mark, for example `40h?`. The total of its epic has a question mark too.
 - The duration of an epic depends only on its stories. The epic starts with its first story and ends with its last story. Its remaining hours are the sum of the remaining hours of its stories. Story points set on the epic itself are ignored.
+- An epic without stories is shown as a striped bar from its Start date to its Due date in Jira, so you can plan a roadmap. The planner does not reserve team hours for it. An epic without stories and without these dates is skipped. The tool finds the Start date field by its name.
 - Stories that are not done start on today's date at the earliest.
 - A done story is placed from its Jira status history. It starts on the first change to the `work_starts_at` status or a status with more progress. Without `work_starts_at`, it starts on the first change to a status with progress above 0. It ends on the last change to a status at 100. A done story without such a change is placed at the start of the plan.
 
@@ -98,7 +99,7 @@ In the chart you can zoom, search for a story and show or hide done stories. Don
 The buttons in the Story column header collapse or expand all epics.
 Each title in the Story column starts with the icon of its Jira issue type. The run downloads these icons from Jira and puts them in the page, so the page shows them without a Jira login. If an icon cannot be downloaded, the page shows an emoji instead: 📖 epic, 🔖 story, 🐛 bug, 🔧 task, 🔩 sub-task, 🔬 spike, 📈 improvement, ✨ feature, 🎯 initiative, 🧪 test, 🚨 incident, 🛟 support request, 🧹 technical debt and 📄 any other type.
 In the day view, weekends and holidays have a gray background.
-A story with a due date in Jira has a red diamond at the end of its due day. If the bar goes past the diamond, the story is planned to end after its due date.
+When a story or epic has a due date in Jira, the chart shows a red diamond on its row. The diamond is at the end of the due date. The bar of the epic will grow past the due date according to the planned stories.
 
 ### Changes and trend
 
