@@ -51,7 +51,8 @@ python jira_smurf.py --help
 
 `./generate-gantt.sh` writes the chart to `plannings/gantt-YYYY-MM-DD.html` and opens it. It uses
 `--history plannings`, and it passes extra arguments such as `--since` or `--since 2026-10-01` to
-the `gantt` command. It uses `open`, so it works on macOS.
+the `gantt` command. It uses `open`, so it works on macOS. If there is a virtual environment in
+`.venv`, the script uses its Python, so you do not have to activate it first.
 
 Progress messages go to standard error, so they do not end up in the output.
 
