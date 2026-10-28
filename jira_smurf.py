@@ -871,6 +871,7 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
             "issue_type_icon_url": (issue["fields"].get("issuetype") or {}).get("iconUrl", ""),
             "effort": 0 if progress >= 1.0 else hours,
             "total_hours": total_hours,
+            "points": sp,
             "estimated": sp is not None,
             "start": start_date.isoformat(),
             "end": (end_date + timedelta(days=1)).isoformat(),
@@ -1053,6 +1054,17 @@ def format_last_day(iso_end):
 def format_hours(hours):
     """Return hours as "8h" or "7.5h"."""
     return f"{hours:.0f}h" if hours == int(hours) else f"{hours:.1f}h"
+
+
+def format_points(points):
+    """Return story points as "5" or "0.5", or "" for a story without points."""
+    return "" if points is None else f"{points:g}"
+
+
+def sprint_number(sprint):
+    """Return the number at the end of a sprint name, such as "26" for "DTIC Sprint 26", or the whole name."""
+    match = re.search(r"(\d+)\s*$", sprint)
+    return match.group(1) if match else sprint
 
 
 def format_signed(value, unit):
@@ -1354,11 +1366,14 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             total_weight += weight
         epic_progress = weighted_progress / total_weight if total_weight > 0 else 0
 
+        epic_points = sum(s.get("points") or 0 for s in epic_stories)
+
         tasks.append({
             "id": task_id,
             "text": epic_name,
             "start_date": epic_start,
             "end_date": epic_end,
+            "points": format_points(epic_points) if epic_points else "",
             "effort": effort_str,
             "status": "",
             "color": epic_color_map[epic_name],
@@ -1401,6 +1416,9 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             "start_date": s["start"],
             "end_date": s["end"],
             "progress": progress,
+            "points": format_points(s.get("points")),
+            "sprint": sprint_number(s.get("sprint", "")),
+            "sprint_name": s.get("sprint", ""),
             "effort": effort_str,
             "status": s["status"],
             "color": epic_color_map[s["epic"]],
@@ -1649,6 +1667,12 @@ gantt.config.columns = [
       return icon + "<span title='" + task.text.replace(/'/g, "&#39;") + "'>" + title + "</span>";
     }} }},
   {{name: "status", label: "Status", align: "left", width: 120, resize: true}},
+  {{name: "points", label: "Points", align: "center", width: 70, resize: true,
+    template: function(task) {{ return task.points || ""; }} }},
+  {{name: "sprint", label: "Sprint", align: "center", width: 70, resize: true,
+    template: function(task) {{
+      return task.sprint ? "<span title='" + task.sprint_name.replace(/'/g, "&#39;") + "'>" + task.sprint + "</span>" : "";
+    }} }},
   {{name: "effort", label: "Remaining", align: "center", width: 100, resize: true, template: effortText}}{moved_column}
 ];
 gantt.templates.tooltip_text = function(start, end, task) {{
