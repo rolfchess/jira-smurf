@@ -177,6 +177,7 @@ class GanttConfig:
     status_colors: dict  # {lowercase_name: css_color}
     work_start_progress: float  # progress of the status where work on a story starts, 0 if not set
     use_backlog_order: bool  # schedule stories in Jira backlog order instead of the order of the configuration file
+    dependency_links: list  # lowercase names of Jira link types that make a story wait for another
 
 
 def parse_dates(setting, values, path):
@@ -313,6 +314,11 @@ def load_gantt_config(path="gantt.toml"):
     include_open_sprints = raw.get("include_open_sprints", False)
     include_future_sprints = raw.get("include_future_sprints", False)
     use_backlog_order = raw.get("use_backlog_order", False)
+    dependency_links = raw.get("dependency_links", ["Blocks"])
+    if not isinstance(dependency_links, list) or not all(isinstance(name, str) for name in dependency_links):
+        print(f"Error: 'dependency_links' must be a list of Jira link type names, got {dependency_links!r}",
+              file=sys.stderr)
+        sys.exit(1)
     for name, val in (("include_open_sprints", include_open_sprints),
                       ("include_future_sprints", include_future_sprints),
                       ("use_backlog_order", use_backlog_order)):
@@ -334,7 +340,8 @@ def load_gantt_config(path="gantt.toml"):
                        holidays=holidays,
                        status_colors=status_colors,
                        work_start_progress=work_start_progress,
-                       use_backlog_order=use_backlog_order)
+                       use_backlog_order=use_backlog_order,
+                       dependency_links=[name.lower() for name in dependency_links])
 
 
 def fetch_stories_for_epic(epic_key):
@@ -343,7 +350,7 @@ def fetch_stories_for_epic(epic_key):
     Tries next-gen (parent) first, falls back to classic (Epic Link).
     Returns list of issue dicts.
     """
-    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10028,duedate,issuetype"
+    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10028,duedate,issuetype,issuelinks"
 
     for jql in (
         f"parent = {epic_key} AND issuetype = Story ORDER BY key ASC",
@@ -382,7 +389,7 @@ def fetch_stories_by_keys(story_keys, warn_missing=True):
     """
     keys_str = ", ".join(story_keys)
     jql = f"key in ({keys_str})"
-    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10028,duedate,issuetype"
+    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10028,duedate,issuetype,issuelinks"
     issues = []
     next_page_token = None
 
@@ -457,7 +464,7 @@ def fetch_sprint_stories(include_open, include_future):
         sprint_functions.append("futureSprints()")
     sprint_clause = " OR ".join(f"sprint in {f}" for f in sprint_functions)
     jql = f"project = {JIRA_PROJECT} AND issuetype = Story AND ({sprint_clause}) ORDER BY key ASC"
-    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10028,duedate,issuetype"
+    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10028,duedate,issuetype,issuelinks"
     issues = []
     next_page_token = None
 
@@ -516,6 +523,32 @@ def work_dates(status_changes, statuses, work_start_progress=0.0):
     if start is None or start > end:
         start = end
     return start, end
+
+
+def link_dependencies(issues, link_types):
+    """Return {story key: {key of a story it waits for, ...}} from the Jira links between the given issues.
+
+    Only links of the given lowercase type names count. They must work like Blocks: an issue
+    that "blocks" another must finish before the other, which "is blocked by" it, can start.
+    Links to issues that are not in the given list are left out.
+    """
+    keys = {issue["key"] for issue in issues}
+    dependencies = {}
+    for issue in issues:
+        for link in issue["fields"].get("issuelinks") or []:
+            if (link.get("type") or {}).get("name", "").lower() not in link_types:
+                continue
+            # Jira describes a link from this issue: it "blocks" an outwardIssue
+            # and "is blocked by" an inwardIssue
+            if "outwardIssue" in link:
+                waiting, first = link["outwardIssue"]["key"], issue["key"]
+            elif "inwardIssue" in link:
+                waiting, first = issue["key"], link["inwardIssue"]["key"]
+            else:
+                continue
+            if waiting in keys and first in keys:
+                dependencies.setdefault(waiting, set()).add(first)
+    return dependencies
 
 
 def find_start_date_field():
@@ -2016,6 +2049,16 @@ def run_gantt(config_path, history_dir=None, since=None):
                 continue
             ordered_keys.append(key)
             story_data[key] = issue
+
+    # Add the dependencies from Jira links to those of the configuration file
+    if config.dependency_links:
+        linked = link_dependencies(list(story_data.values()), config.dependency_links)
+        count = sum(len(firsts) for firsts in linked.values())
+        if count:
+            print(f"Found {count} {'dependency' if count == 1 else 'dependencies'} in Jira links", file=sys.stderr)
+        for key, firsts in linked.items():
+            current = config.dependencies.get(key, [])
+            config.dependencies[key] = current + sorted(firsts - set(current))
 
     # Resolve epics and attach to issue dicts
     epic_cache = {}

@@ -77,6 +77,7 @@ example.
 | `velocity`               | Hours per story point.                                                                                                                                                         |
 | `include_open_sprints`   | `true` also adds all stories in the active sprint.                                                                                                                             |
 | `include_future_sprints` | `true` also adds all stories in future sprints.                                                                                                                                |
+| `dependency_links`       | This is the list of Jira link types that work as dependencies. The default is `["Blocks"]`. A story that "is blocked by" another story starts after that story is finished. A type in this list must work like Blocks. Use `[]` to ignore Jira links. |
 | `use_backlog_order`      | `true` plans the stories in the order of the Jira backlog. The rows of the chart keep the order of this file.                                                                  |
 | `work_starts_at`         | This is the status where work on a story starts, for example `"In Progress"`. A done story's bar starts on the first change to this status, or to a status with more progress. |
 | `holidays`               | This is a list of days off for the whole team, for example `["2026-12-25", "2026-12-26"]`.                                                                                     |
@@ -93,7 +94,7 @@ How the planning works:
 - Stories are planned in the order of the file: epics first, then single stories, then sprint
   stories. With `use_backlog_order = true`, they are planned in the order of the Jira backlog. The
   rows of the chart always follow the order of the file.
-- A story never starts before the stories in its `depends_on` list are finished.
+- A story never starts before the stories in its `depends_on` list are finished. The same holds for stories that block it in Jira, with a link type from `dependency_links`. Both kinds of dependencies have an arrow in the chart. Links to stories that are not in the plan are ignored.
 - A story assigned in Jira to a team member goes to that member. Other stories go to the auto-assign
   member who is free first.
 - Remaining work is the estimate times (1 minus the progress of the status).
