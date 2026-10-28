@@ -1,6 +1,7 @@
 # Secrets and local configuration
 .env
 gantt.toml
+publish-gantt.sh
 .claude/settings.local.json
 
 # Generated output
