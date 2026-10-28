@@ -1500,6 +1500,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     holidays_json = json.dumps(sorted(d.isoformat() for d in holidays))
     show_changes_json = "true" if changes else "false"
     unassigned_json = json.dumps(UNASSIGNED)
+    jira_url_json = json.dumps(JIRA_URL)
     icon_images_json = json.dumps(icon_images or {})
     if changes:
         since = changes["since"]
@@ -1613,6 +1614,16 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   #trend table {{ border-collapse: collapse; margin-top: 6px; }}
   #trend th, #trend td {{ border: 1px solid #ddd; padding: 4px 10px; text-align: left; }}
   .type-icon {{ margin-right: 5px; }}
+  a.story-link {{ color: #0c66e4; text-decoration: none; }}
+  a.story-link:hover {{ text-decoration: underline; }}
+  .status-badge {{
+    display: inline-block; max-width: 100%; box-sizing: border-box; overflow: hidden; text-overflow: ellipsis;
+    padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 700; line-height: 16px;
+    text-transform: uppercase; vertical-align: middle; white-space: nowrap;
+  }}
+  .status-badge.todo {{ background: #dfe1e6; color: #42526e; }}
+  .status-badge.doing {{ background: #deebff; color: #0747a6; }}
+  .status-badge.done {{ background: #e3fcef; color: #006644; }}
   img.type-icon {{ width: 16px; height: 16px; vertical-align: -3px; }}
   .tree-buttons {{ margin-left: 12px; }}
   .tree-buttons button {{
@@ -1668,6 +1679,14 @@ function movedText(task) {{
   var cls = task.moved_days > 0 ? "delta-up" : "delta-down";
   return "<span class='" + cls + "'>" + signed(task.moved_days, "d") + "</span>";
 }}
+// The status as a badge, gray before work starts, blue while in progress and green when done,
+// from the progress of the status in [statuses].
+function statusBadge(task) {{
+  if (!task.status) return "";
+  var cls = task.progress >= 1 ? "done" : task.progress > 0 ? "doing" : "todo";
+  var status = escapeHtml(task.status);
+  return "<span class='status-badge " + cls + "' title='" + status + "'>" + status + "</span>";
+}}
 function onShowChangesChange() {{
   showChanges = document.getElementById("show-changes").checked;
   gantt.render();
@@ -1687,10 +1706,16 @@ gantt.config.columns = [
         task.icon ? "<span class='type-icon'>" + task.icon + "</span>" : "";
       var text = escapeHtml(task.text);
       var title = task.is_epic ? "<b>" + text + "</b>" : text;
+      // The key of a story opens the story in Jira in a new tab
+      var prefix = task.story_key + ": ";
+      if (!task.is_epic && task.story_key && task.text.indexOf(prefix) === 0) {{
+        title = "<a class='story-link' href='" + JIRA_URL + "/browse/" + encodeURIComponent(task.story_key) +
+          "' target='_blank' rel='noopener' onclick='event.stopPropagation()'>" + escapeHtml(task.story_key) +
+          "</a>: " + escapeHtml(task.text.slice(prefix.length));
+      }}
       return icon + "<span title='" + text + "'>" + title + "</span>";
     }} }},
-  {{name: "status", label: "Status", align: "left", width: 120, resize: true,
-    template: function(task) {{ return escapeHtml(task.status || ""); }} }},
+  {{name: "status", label: "Status", align: "left", width: 120, resize: true, template: statusBadge}},
   {{name: "points", label: "Points", align: "center", width: 70, resize: true,
     template: function(task) {{ return task.points || ""; }} }},
   {{name: "sprint", label: "Sprint", align: "center", width: 70, resize: true,
@@ -1786,6 +1811,7 @@ function setZoom(level) {{
 }}
 var hideDone = false;
 var UNASSIGNED = {unassigned_json};
+var JIRA_URL = {jira_url_json};
 var selectedMembers = {{}};  // {{assignee: true}} for the team members whose stories are shown; empty shows all
 var selectedCount = 0;  // number of keys in selectedMembers
 var selectedSprint = null;  // sprint number whose stories are shown, "" for stories without a sprint, null for all
@@ -2220,7 +2246,7 @@ document.getElementById("gantt_here").addEventListener("click", function(e) {{
   try {{
     var task = gantt.getTask(id);
     if (task.story_key) {{
-      window.open("{JIRA_URL}/browse/" + task.story_key, "_blank");
+      window.open(JIRA_URL + "/browse/" + encodeURIComponent(task.story_key), "_blank");
     }}
   }} catch(ex) {{}}
 }});
