@@ -863,6 +863,7 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
         hours = total_hours if progress >= 1.0 else total_hours * (1.0 - progress)
 
         # Determine who works on this story
+        auto_assigned = False  # True when the plan picks the member, not Jira
         if progress >= 1.0:
             # A done story keeps its assignee from Jira and takes no time from anyone.
             # Without Jira dates, it is placed on these standard working days from the plan start.
@@ -889,8 +890,10 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
                     counts = epic_members.setdefault(epic_key, {})
                     member = get_epic_member(counts, member_states, availability)
                     counts[member] = counts.get(member, 0) + 1
+                    auto_assigned = True
                 elif config.auto_assign:
                     member = get_earliest_available_member(member_states, availability)
+                    auto_assigned = True
                 else:
                     member = UNASSIGNED
             avail = availability[member]
@@ -944,6 +947,7 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
             "epic": issue.get("_epic", "(No Epic)"),
             "epic_key": issue.get("_epic_key", ""),
             "assignee": member or assignee_name,
+            "auto_assigned": auto_assigned,
             "status": status,
             "sprint": sprint,
             "due": issue["fields"].get("duedate") or "",
@@ -1479,6 +1483,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             "id": task_id,
             "text": f"{s['key']}: {s['title']}",
             "assignee": s["assignee"],
+            "auto_assigned": s.get("auto_assigned", False),
             "start_date": s["start"],
             "end_date": s["end"],
             "progress": progress,
@@ -1684,6 +1689,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   #trend th, #trend td {{ border: 1px solid #ddd; padding: 4px 10px; text-align: left; }}
   .type-icon {{ margin-right: 5px; }}
   a.story-link {{ color: #0c66e4; text-decoration: none; }}
+  .auto-assigned {{ font-style: italic; color: #6554c0; text-decoration: underline dotted; }}
   a.story-link:hover {{ text-decoration: underline; }}
   .status-badge {{
     display: inline-block; max-width: 100%; box-sizing: border-box; overflow: hidden; text-overflow: ellipsis;
@@ -2216,7 +2222,12 @@ gantt.templates.task_text = function(start, end, task) {{
 }};
 gantt.templates.rightside_text = function(start, end, task) {{
   var parts = [];
-  if (task.assignee) parts.push(escapeHtml(task.assignee));
+  if (task.assignee && task.auto_assigned) {{
+    parts.push("<span class='auto-assigned' title='Assigned by the plan, not in Jira'>" +
+      escapeHtml(task.assignee) + " (auto)</span>");
+  }} else if (task.assignee) {{
+    parts.push(escapeHtml(task.assignee));
+  }}
   parts.push(gantt.date.date_to_str("%d %M")(end));
   if (task.age_days != null) {{
     parts.push("<span title='Weekdays since the story was created in Jira'>" + task.age_days + "d old</span>");

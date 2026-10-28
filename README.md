@@ -144,7 +144,8 @@ so closed sprints are listed only when done stories are shown. It works together
 count only the stories of that sprint. "No longer in the plan" is hidden while a sprint is selected,
 because snapshots have no sprints. Next to each story bar are its assignee, its last planned day and its age, for example `12d old`.
 The age is the number of weekdays from the day the story was created in Jira up to today. Holidays
-count as weekdays here. Click a bar, or the key of a story in the Story column, to open the story in Jira in a new tab. The
+count as weekdays here. When the plan picked the member because the story has no team member in Jira, the
+name is purple and in italics, followed by "(auto)". Click a bar, or the key of a story in the Story column, to open the story in Jira in a new tab. The
 Status column shows the status as a badge: gray before work starts, blue while in progress and green
 when done, from the progress of the status in `[statuses]`. The buttons in the Story column header collapse or
 expand all epics. Each title in the Story column starts with the icon of its Jira issue type. The
