@@ -133,13 +133,24 @@ def get_story_points(fields):
     return ""
 
 
-def get_sprint(fields):
-    """Extract the most recent sprint name."""
+def get_sprint(fields, done):
+    """Return the name of the sprint of a story, or "" when it is in no sprint.
+
+    The Sprint field also keeps the closed sprints a story was in. An open story that was not moved
+    to a new sprint is in the backlog, so for it only an active or future sprint counts. A done story
+    gets its last sprint, which is the one it was finished in.
+    """
     sprints = fields.get(SPRINT_FIELD)
-    if sprints:
-        # Sprint field is a list of sprint objects; take the last (most recent) one
-        return sprints[-1].get("name", "") if isinstance(sprints, list) else ""
-    return ""
+    if not isinstance(sprints, list):
+        return ""
+    if not done:
+        sprints = [sprint for sprint in sprints if sprint.get("state") != "closed"]
+    return sprints[-1].get("name", "") if sprints else ""
+
+
+def is_done_in_jira(fields):
+    """Return True when the status of a story is in the Done category of Jira."""
+    return (fields.get("status") or {}).get("statusCategory", {}).get("key") == "done"
 
 
 UNASSIGNED = "Unassigned"  # the assignee of stories without one, and their planning lane without auto-assign
@@ -789,10 +800,9 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
         title = issue["fields"]["summary"]
         status = issue["fields"].get("status", {}).get("name", "")
         assignee_name = get_assignee(issue["fields"])
-        sprint = get_sprint(issue["fields"])
-
         # Check if story is fully done via status mapping
         progress = config.statuses.get(status.lower(), 0)
+        sprint = get_sprint(issue["fields"], progress >= 1.0)
         sp = get_story_points_numeric(issue["fields"])
         if sp is not None:
             total_hours = sp * config.velocity
@@ -2555,7 +2565,7 @@ def run_export(fmt):
             "Story ID": key,
             "Title": issue["fields"]["summary"],
             "Status": status,
-            "Sprint": get_sprint(issue["fields"]),
+            "Sprint": get_sprint(issue["fields"], is_done_in_jira(issue["fields"])),
             "Points": get_story_points(issue["fields"]),
             "Assignee": get_assignee(issue["fields"]),
         })

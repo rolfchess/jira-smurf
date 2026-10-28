@@ -127,8 +127,9 @@ at first. Click a team member badge above the table to show only the stories of 
 select more than one member, and "Unassigned". The epic rows then show the points and remaining hours
 of the stories of those members, done or not, and the baseline of the epics is hidden. "No longer in
 the plan" shows only the stories of those members. Snapshots made before this version have no
-assignees, so their removed stories are hidden while members are selected. The Points and Sprint columns show the story points and the last sprint of
-each story. For a sprint name that ends in "Sprint" and a number, such as "DTIC Sprint 26", only the
+assignees, so their removed stories are hidden while members are selected. The Points and Sprint columns show the story points and the sprint of
+each story. For an open story, this is its active or future sprint. A story that only has closed
+sprints is back in the backlog, so it has no sprint. A done story shows the sprint it was finished in. For a sprint name that ends in "Sprint" and a number, such as "DTIC Sprint 26", only the
 number is shown. The Sprint list in the toolbar shows only the stories of one sprint, and only the
 epics that have stories in it. It works together with the team member badges, and the epic rows then
 count only the stories of that sprint. "No longer in the plan" is hidden while a sprint is selected,
