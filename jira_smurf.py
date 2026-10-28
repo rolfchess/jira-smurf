@@ -1524,7 +1524,14 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   .gantt_task_line.roadmap-epic {{ opacity: 0.75;
     background-image: repeating-linear-gradient(45deg, rgba(255,255,255,0.45) 0 6px, transparent 6px 12px); }}
   .gantt_task_line.epic-bar .gantt_task_content {{ font-weight: 600; }}
-  .gantt_task_line.due-late {{ box-shadow: 0 0 0 2px #d62728; }}
+  .gantt_task_line.due-late {{ box-shadow: 0 0 0 2px #d62728; animation: due-late-glow 0.5s ease-in-out infinite; }}
+  @keyframes due-late-glow {{
+    0%, 100% {{ box-shadow: 0 0 0 2px #d62728, 0 0 2px 1px rgba(214, 39, 40, 0.3); }}
+    50% {{ box-shadow: 0 0 0 2px #d62728, 0 0 8px 4px rgba(214, 39, 40, 0.6); }}
+  }}
+  @media (prefers-reduced-motion: reduce) {{
+    .gantt_task_line.due-late {{ animation: none; }}
+  }}
   .gantt_task_line.change-late {{ box-shadow: 0 0 0 2px #ff8c00; }}
   .delta-up {{ color: #c62828; font-weight: 600; }}
   .delta-down {{ color: #2e7d32; font-weight: 600; }}
