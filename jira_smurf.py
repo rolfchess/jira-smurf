@@ -342,7 +342,7 @@ def fetch_stories_for_epic(epic_key):
     Tries next-gen (parent) first, falls back to classic (Epic Link).
     Returns list of issue dicts.
     """
-    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10028,duedate"
+    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10028,duedate,issuetype"
 
     for jql in (
         f"parent = {epic_key} AND issuetype = Story ORDER BY key ASC",
@@ -378,7 +378,7 @@ def fetch_stories_by_keys(story_keys):
     """Fetch specific stories by their Jira keys."""
     keys_str = ", ".join(story_keys)
     jql = f"key in ({keys_str})"
-    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10028,duedate"
+    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10028,duedate,issuetype"
     issues = []
     next_page_token = None
 
@@ -434,7 +434,7 @@ def fetch_sprint_stories(include_open, include_future):
         sprint_functions.append("futureSprints()")
     sprint_clause = " OR ".join(f"sprint in {f}" for f in sprint_functions)
     jql = f"project = {JIRA_PROJECT} AND issuetype = Story AND ({sprint_clause}) ORDER BY key ASC"
-    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10028,duedate"
+    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10028,duedate,issuetype"
     issues = []
     next_page_token = None
 
@@ -698,6 +698,7 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
             "status": status,
             "sprint": sprint,
             "due": issue["fields"].get("duedate") or "",
+            "issue_type": (issue["fields"].get("issuetype") or {}).get("name", ""),
             "effort": 0 if progress >= 1.0 else hours,
             "total_hours": total_hours,
             "start": start_date.isoformat(),
@@ -720,6 +721,7 @@ def plan_snapshot(scheduled, status_map, run_date):
             "title": s["title"],
             "epic": s["epic"],
             "epic_key": s.get("epic_key", ""),
+            "issue_type": s.get("issue_type", ""),
             "status": s["status"],
             "progress": progress,
             "total_hours": s["total_hours"],
@@ -1044,6 +1046,34 @@ A rising line means it moved later. The gray diagonal shows where the planned en
 </div>"""
 
 
+# Icons shown before the title in the Story column, by lowercase Jira issue type
+ISSUE_TYPE_ICONS = {
+    "epic": "📖",
+    "story": "🔖",
+    "bug": "🐛",
+    "task": "🔧",
+    "sub-task": "🔩",
+    "subtask": "🔩",
+    "spike": "🔬",
+    "improvement": "📈",
+    "new feature": "✨",
+    "feature": "✨",
+    "initiative": "🎯",
+    "test": "🧪",
+    "incident": "🚨",
+    "support request": "🛟",
+    "technical debt": "🧹",
+}
+OTHER_ISSUE_TYPE_ICON = "📄"
+
+
+def issue_type_icon(issue_type):
+    """Return the icon for a Jira issue type name, or "" if the name is empty."""
+    if not issue_type:
+        return ""
+    return ISSUE_TYPE_ICONS.get(issue_type.lower(), OTHER_ISSUE_TYPE_ICON)
+
+
 EPIC_COLORS = [
     "#4e79a7", "#f28e2b", "#e15759", "#76b7b2", "#59a14f",
     "#edc948", "#b07aa1", "#ff9da7", "#9c755f", "#bab0ac",
@@ -1118,6 +1148,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             "color": epic_color_map[epic_name],
             "type": "project",
             "open": True,
+            "icon": ISSUE_TYPE_ICONS["epic"],
             "story_key": epic_name_to_key.get(epic_name, ""),
             "progress": epic_progress,
             **(changes["epics"].get(epic_name, {}) if changes else {}),
@@ -1152,6 +1183,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             "parent": epic_task_ids[s["epic"]],
             "story_key": s["key"],
             "due_date": s.get("due", ""),
+            "icon": issue_type_icon(s.get("issue_type", "")),
             **(changes["stories"].get(s["key"], {}) if changes else {}),
         })
 
@@ -1178,6 +1210,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             tasks.append({
                 "id": task_id,
                 "text": f"{r['key']}: {r['title']} ({r['epic']})",
+                "icon": issue_type_icon(r.get("issue_type", "")),
                 "start_date": r["start"],
                 "end_date": r["end"],
                 "progress": 0,
@@ -1303,6 +1336,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   .trend-help {{ font-size: 13px; color: #555; margin: 0; }}
   #trend table {{ border-collapse: collapse; margin-top: 6px; }}
   #trend th, #trend td {{ border: 1px solid #ddd; padding: 4px 10px; text-align: left; }}
+  .type-icon {{ margin-right: 5px; }}
   .tree-buttons {{ margin-left: 12px; }}
   .tree-buttons button {{
     padding: 1px 8px; margin-right: 4px; border: 1px solid #ccc; border-radius: 4px;
@@ -1366,7 +1400,10 @@ gantt.config.columns = [
     label: "Story <span class='tree-buttons'>" +
       "<button onclick='setAllOpen(false); event.stopPropagation();'>Collapse all</button>" +
       "<button onclick='setAllOpen(true); event.stopPropagation();'>Expand all</button></span>",
-    template: function(task) {{ return "<span title='" + task.text.replace(/'/g, "&#39;") + "'>" + task.text + "</span>"; }} }},
+    template: function(task) {{
+      var icon = task.icon ? "<span class='type-icon'>" + task.icon + "</span>" : "";
+      return icon + "<span title='" + task.text.replace(/'/g, "&#39;") + "'>" + task.text + "</span>";
+    }} }},
   {{name: "status", label: "Status", align: "left", width: 120, resize: true}},
   {{name: "effort", label: "Remaining", align: "center", width: 100, resize: true, template: effortText}}{moved_column}
 ];

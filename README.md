@@ -94,6 +94,7 @@ How the planning works:
 
 In the chart you can zoom, search for a story and show or hide done stories. Done stories are hidden at first. Click a bar to open the story in Jira.
 The buttons in the Story column header collapse or expand all epics.
+Each title in the Story column starts with an icon for its Jira issue type: 📖 epic, 🔖 story, 🐛 bug, 🔧 task, 🔩 sub-task, 🔬 spike, 📈 improvement, ✨ feature, 🎯 initiative, 🧪 test, 🚨 incident, 🛟 support request, 🧹 technical debt and 📄 any other type.
 In the day view, weekends and holidays have a gray background.
 A story with a due date in Jira has a red diamond at the end of its due day. If the bar goes past the diamond, the story is planned to end after its due date.
 
