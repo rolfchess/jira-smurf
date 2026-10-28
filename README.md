@@ -79,10 +79,11 @@ example.
 | `include_future_sprints` | `true` also adds all stories in future sprints.                                                                                                                                |
 | `dependency_links`       | This is the list of Jira link types that work as dependencies. The default is `["Blocks"]`. A story that "is blocked by" another story starts after that story is finished. A type in this list must work like Blocks. Use `[]` to ignore Jira links. |
 | `use_backlog_order`      | `true` plans the stories in the order of the Jira backlog. The rows of the chart keep the order of this file.                                                                  |
+| `auto_assign`            | `false` gives no stories to team members that are not assigned to them in Jira. Such stories are planned one after another under "Unassigned", 8 hours a day. The default is `true`. |
 | `work_starts_at`         | This is the status where work on a story starts, for example `"In Progress"`. A done story's bar starts on the first change to this status, or to a status with more progress. |
 | `holidays`               | This is a list of days off for the whole team, for example `["2026-12-25", "2026-12-26"]`.                                                                                     |
 | `[team."Name"]`          | Hours per weekday (`mon` to `fri`) for each team member. The name must match the display name in Jira.                                                                         |
-| `auto_assign`            | Per team member. `false` means the member gets no unassigned stories. Such a member may have no hours.                                                                         |
+| `auto_assign`            | Per team member. `false` means the member gets no unassigned stories. Such a member may have no hours. This has no effect when the top-level `auto_assign` is `false`.                                                                       |
 | `days_off`               | This is set per team member. It is a list of days off, for example `["2026-12-10", "2026-12-18 to 2027-01-01"]`. A range includes both days. No work is planned on those days. |
 | `[statuses]`             | Progress in percent for each Jira status. A story at 100 is done.                                                                                                              |
 | `[status_colors]`        | This sets a row background color for each Jira status, for example `"Blocked" = "#ffcccc"`.                                                                                    |
@@ -96,7 +97,7 @@ How the planning works:
   rows of the chart always follow the order of the file.
 - A story never starts before the stories in its `depends_on` list are finished. The same holds for stories that block it in Jira, with a link type from `dependency_links`. Both kinds of dependencies have an arrow in the chart. Links to stories that are not in the plan are ignored.
 - A story assigned in Jira to a team member goes to that member. Other stories go to the auto-assign
-  member who is free first.
+  member who is free first. With `auto_assign = false`, they go to "Unassigned" instead.
 - A story assigned in Jira to someone who is not in `[team]` keeps that assignee. That person is
   planned with 8 hours a day, Monday to Friday. They never get stories without an assignee. Add them
   to `[team]` to plan them with their real hours.

@@ -178,6 +178,7 @@ class GanttConfig:
     work_start_progress: float  # progress of the status where work on a story starts, 0 if not set
     use_backlog_order: bool  # schedule stories in Jira backlog order instead of the order of the configuration file
     dependency_links: list  # lowercase names of Jira link types that make a story wait for another
+    auto_assign: bool  # give stories without a team member to the team; if False, plan them under "Unassigned"
 
 
 def parse_dates(setting, values, path):
@@ -238,6 +239,12 @@ def load_gantt_config(path="gantt.toml"):
     # Holidays are days off for the whole team
     holidays = parse_dates("'holidays'", raw.get("holidays", []), path)
 
+    # Without auto-assign, stories without a team member are not given to the team
+    auto_assign_team = raw.get("auto_assign", True)
+    if not isinstance(auto_assign_team, bool):
+        print(f"Error: 'auto_assign' must be true or false, got {auto_assign_team!r}", file=sys.stderr)
+        sys.exit(1)
+
     # Validate team
     team = raw.get("team", {})
     if not team:
@@ -254,7 +261,7 @@ def load_gantt_config(path="gantt.toml"):
             print(f"Error: team member '{name}' has no working hours configured. "
                   f"Add hours or set auto_assign = false", file=sys.stderr)
             sys.exit(1)
-    if not any(avail.get("auto_assign", True) for avail in team.values()):
+    if auto_assign_team and not any(avail.get("auto_assign", True) for avail in team.values()):
         print(f"Error: no team member in {path} has auto_assign enabled", file=sys.stderr)
         sys.exit(1)
 
@@ -341,7 +348,8 @@ def load_gantt_config(path="gantt.toml"):
                        status_colors=status_colors,
                        work_start_progress=work_start_progress,
                        use_backlog_order=use_backlog_order,
-                       dependency_links=[name.lower() for name in dependency_links])
+                       dependency_links=[name.lower() for name in dependency_links],
+                       auto_assign=auto_assign_team)
 
 
 def fetch_stories_for_epic(epic_key):
@@ -742,14 +750,19 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
 
     ordered_keys = sorted(ordered_keys, key=_done_first)
 
-    # member_states tracks the next available date per member
-    member_states = {}
-    for name in config.team:
-        if has_working_hours(config.team[name]):
-            member_states[name] = next_working_day(config.start_date, config.team[name])
     # This has the hours of the team members and of the assignees who are not in [team]
     availability = dict(config.team)
     outside_hours = dict(OUTSIDE_TEAM_HOURS, days_off=set(config.holidays))
+    # Without auto-assign, stories without a team member are planned one after another
+    # under "Unassigned", on a standard week
+    if not config.auto_assign:
+        availability["Unassigned"] = outside_hours
+
+    # member_states tracks the next available date per member
+    member_states = {}
+    for name in availability:
+        if has_working_hours(availability[name]):
+            member_states[name] = next_working_day(config.start_date, availability[name])
 
     scheduled = []
     story_end_dates = {}  # {story_key: end_date} for dependency resolution
@@ -793,9 +806,13 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
                 member_states[assignee_name] = next_working_day(config.start_date, outside_hours)
                 member = assignee_name
             else:
+                action = "auto-assigning" if config.auto_assign else "planning under 'Unassigned'"
                 if assignee_name in config.team:
-                    print(f"Warning: assignee '{assignee_name}' for {story_key} has no working hours, auto-assigning", file=sys.stderr)
-                member = get_earliest_available_member(member_states, availability)
+                    print(f"Warning: assignee '{assignee_name}' for {story_key} has no working hours, {action}", file=sys.stderr)
+                if config.auto_assign:
+                    member = get_earliest_available_member(member_states, availability)
+                else:
+                    member = "Unassigned"
             avail = availability[member]
             cursor = member_states[member]
 
