@@ -83,6 +83,7 @@ example.
 | `holidays`               | This is a list of days off for the whole team, for example `["2026-12-25", "2026-12-26"]`.                                                                                     |
 | `[team."Name"]`          | Hours per weekday (`mon` to `fri`) for each team member. The name must match the display name in Jira.                                                                         |
 | `auto_assign`            | Per team member. `false` means the member gets no unassigned stories. Such a member may have no hours.                                                                         |
+| `in_team`                | This is set per team member. It is a list of periods in which the member is in the team, for example `["to 2026-06-30", "2026-09-01 to"]`. An empty side means the period has no start or no end. Outside these periods, the member has 0 hours, both in the plan and in the velocity. Without `in_team`, the member is always in the team. |
 | `days_off`               | This is set per team member. It is a list of days off, for example `["2026-12-10", "2026-12-18 to 2027-01-01"]`. A range includes both days. No work is planned on those days. |
 | `[statuses]`             | Progress in percent for each Jira status. A story at 100 is done.                                                                                                              |
 | `[status_colors]`        | This sets a row background color for each Jira status, for example `"Blocked" = "#ffcccc"`.                                                                                    |
@@ -96,7 +97,8 @@ How the planning works:
   rows of the chart always follow the order of the file.
 - A story never starts before the stories in its `depends_on` list are finished. The same holds for stories that block it in Jira, with a link type from `dependency_links`. Both kinds of dependencies have an arrow in the chart. Links to stories that are not in the plan are ignored.
 - A story assigned in Jira to a team member goes to that member. Other stories go to the auto-assign
-  member who is free first.
+  member who finishes them first. A member who leaves the team before the story is finished does not
+  get it, unless nobody can finish it.
 - A story assigned in Jira to someone who is not in `[team]` keeps that assignee. That person is
   planned with 8 hours a day, Monday to Friday. They never get stories without an assignee. Add them
   to `[team]` to plan them with their real hours.
@@ -171,8 +173,8 @@ For each week, it adds up:
 The hours divided by the points give the velocity. Use the total as `velocity` in `gantt.toml`. The
 weekly numbers show how much it varies.
 
-The result is less exact when the team changed during the period, because `gantt.toml` describes the
-team as it is now. All other work, such as meetings and bugs without points, counts in the hours. A
+The result is only exact when `gantt.toml` describes the team of the whole period. Use `in_team` to
+record when people joined or left the team. All other work, such as meetings and bugs without points, counts in the hours. A
 story counts in full in the week it was finished.
 
 Read [Velocity: how fast does the team really work?](documentation/velocity.md) for how velocity

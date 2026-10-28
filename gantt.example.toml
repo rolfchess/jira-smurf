@@ -33,6 +33,9 @@ holidays = [
 # Set auto_assign = false to keep a member out of auto-assigning. Such a member may have no hours.
 # List vacation days and other days off in days_off, as YYYY-MM-DD. The member works 0 hours on those days.
 # Write "YYYY-MM-DD to YYYY-MM-DD" for a range. A range includes both days.
+# List the periods a member is in the team in in_team. Leave a side empty for an open end:
+# "2026-09-01 to" has no end, and "to 2026-06-30" has no start. Without in_team, the member is
+# always in the team.
 [team."Alice Baker"]
 mon = 8
 tue = 8
@@ -47,6 +50,7 @@ tue = 8
 wed = 0
 thu = 8
 fri = 8
+in_team = ["to 2026-06-30", "2026-09-01 to"]   # left the team for the summer
 
 [team."Carol Dixon"]
 mon = 4
