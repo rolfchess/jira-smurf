@@ -2283,11 +2283,13 @@ def run_velocity(config_path, weeks):
 
     The hours are the team hours from the configuration file, without days off and holidays.
     The points are those of stories assigned to a team member that moved to a done status.
+    A story without points counts as default_hours divided by the configured velocity.
     """
     config = load_gantt_config(config_path)
     end = date.today() - timedelta(days=date.today().weekday())  # Monday of the current week
     start = end - timedelta(weeks=weeks)
 
+    assumed_points = config.default_hours / config.velocity
     print(f"Fetching the stories finished from {start} to {end - timedelta(days=1)}...", file=sys.stderr)
     week_starts = [start + timedelta(weeks=i) for i in range(weeks)]
     points = {w: 0.0 for w in week_starts}
@@ -2303,8 +2305,8 @@ def run_velocity(config_path, weeks):
         story_points = get_story_points_numeric(fields)
         if story_points is None:
             unpointed[week] += 1
-        else:
-            points[week] += story_points
+            story_points = assumed_points
+        points[week] += story_points
 
     def team_hours(first_day):
         return sum(hours_on(first_day + timedelta(days=i), avail)
@@ -2333,9 +2335,9 @@ def run_velocity(config_path, weeks):
     else:
         print(f"No stories with story points were finished in the last {weeks} weeks.")
     if total_unpointed:
-        stories, their = ("story had", "Its") if total_unpointed == 1 else ("stories had", "Their")
-        print(f"{total_unpointed} finished {stories} no story points. {their} work is in the hours but not "
-              f"in the points, so the real hours per story point are lower than shown.")
+        stories = "story had" if total_unpointed == 1 else "stories had"
+        print(f"{total_unpointed} finished {stories} no story points. Each counts as {assumed_points:g} points: "
+              f"default_hours {config.default_hours:g} divided by velocity {config.velocity:g}.")
 
 
 def run_export(fmt):

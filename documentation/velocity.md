@@ -50,8 +50,13 @@ The output could look somewhat like this for a team of three people who are avai
 | Week 2 | 120   | 10          | 120 ÷ 10 = 12   |
 | Total  | 240   | 25          | 240 ÷ 25 = 9.6  |
 
-One week says 8, the next says 12. For the planning, use the total over all weeks. Put it in
-`gantt.toml` as `velocity`.
+Note that completed stories without points get default points by using the `default_hours` setting
+and `velocity` setting. So if those are set to 40 and 8 respectively, the default number of points
+for a completed story is 40 / 8 = 5 points.
+
+In the table we can see that the velocity in week one is 8, and in week 2 it is 12. Velocity
+fluctuates, so if possible prefer to use the total (9.6 in the example above) or otherwise try to
+use at least something sensible that is not too optimistic so that your outlook is a bit realistic.
 
 Note that the hours include everything the team does: meetings, support, bugs, coffee, unplanned
 days off. That is on purpose. The plan has to make room for all the things a team does next to the

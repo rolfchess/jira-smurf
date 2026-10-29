@@ -168,7 +168,8 @@ For each week, it adds up:
 
 - the team hours from `gantt.toml`, without days off and holidays;
 - the story points of the stories that moved to a done status in that week and are assigned to a
-  team member.
+  team member. A story without points counts as `default_hours` divided by `velocity` points, so
+  with 40 hours and a velocity of 8 it counts as 5 points.
 
 The hours divided by the points give the velocity. Use the total as `velocity` in `gantt.toml`. The
 weekly numbers show how much it varies.
