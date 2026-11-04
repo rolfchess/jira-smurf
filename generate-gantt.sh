@@ -4,5 +4,8 @@
 set -e
 mkdir -p plannings
 out="plannings/gantt-$(date +%Y-%m-%d).html"
-python3 jira_smurf.py gantt -c gantt.toml -o "$out" --history plannings "$@"
+# Use the virtual environment in .venv when there is one
+python=python3
+[ -x .venv/bin/python ] && python=.venv/bin/python
+"$python" jira_smurf.py gantt -c gantt.toml -o "$out" --history plannings "$@"
 open "$out"

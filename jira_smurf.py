@@ -8,10 +8,14 @@ import csv
 import glob
 import heapq
 import html
+import http.server
+import io
 import json
 import os
 import re
 import sys
+import threading
+import webbrowser
 from dataclasses import dataclass
 from datetime import date, timedelta
 
@@ -134,12 +138,21 @@ def get_story_points(fields):
 
 
 def get_sprint(fields):
-    """Extract the most recent sprint name."""
+    """Return the name of the active sprint of a story, or else of its latest sprint, or ""."""
     sprints = fields.get(SPRINT_FIELD)
-    if sprints:
-        # Sprint field is a list of sprint objects; take the last (most recent) one
-        return sprints[-1].get("name", "") if isinstance(sprints, list) else ""
-    return ""
+    if not sprints or not isinstance(sprints, list):
+        return ""
+    # Jira does not keep this list in sprint order, so pick by state, then by date
+    state_order = {"active": 2, "future": 1}
+    latest = max(sprints, key=lambda s: (state_order.get(s.get("state"), 0),
+                                         s.get("endDate") or s.get("startDate") or "", s.get("id", 0)))
+    return latest.get("name", "")
+
+
+def in_active_sprint(fields):
+    """Return True when the story is in a sprint that is running now."""
+    sprints = fields.get(SPRINT_FIELD)
+    return isinstance(sprints, list) and any(s.get("state") == "active" for s in sprints)
 
 
 def get_assignee(fields):
@@ -178,6 +191,7 @@ class GanttConfig:
     work_start_progress: float  # progress of the status where work on a story starts, 0 if not set
     use_backlog_order: bool  # schedule stories in Jira backlog order instead of the order of the configuration file
     dependency_links: list  # lowercase names of Jira link types that make a story wait for another
+    auto_assign: bool  # give stories without a team member to the team; if False, plan them under "Unassigned"
 
 
 def parse_dates(setting, values, path):
@@ -238,6 +252,12 @@ def load_gantt_config(path="gantt.toml"):
     # Holidays are days off for the whole team
     holidays = parse_dates("'holidays'", raw.get("holidays", []), path)
 
+    # Without auto-assign, stories without a team member are not given to the team
+    auto_assign_team = raw.get("auto_assign", True)
+    if not isinstance(auto_assign_team, bool):
+        print(f"Error: 'auto_assign' must be true or false, got {auto_assign_team!r}", file=sys.stderr)
+        sys.exit(1)
+
     # Validate team
     team = raw.get("team", {})
     if not team:
@@ -254,7 +274,7 @@ def load_gantt_config(path="gantt.toml"):
             print(f"Error: team member '{name}' has no working hours configured. "
                   f"Add hours or set auto_assign = false", file=sys.stderr)
             sys.exit(1)
-    if not any(avail.get("auto_assign", True) for avail in team.values()):
+    if auto_assign_team and not any(avail.get("auto_assign", True) for avail in team.values()):
         print(f"Error: no team member in {path} has auto_assign enabled", file=sys.stderr)
         sys.exit(1)
 
@@ -341,7 +361,8 @@ def load_gantt_config(path="gantt.toml"):
                        status_colors=status_colors,
                        work_start_progress=work_start_progress,
                        use_backlog_order=use_backlog_order,
-                       dependency_links=[name.lower() for name in dependency_links])
+                       dependency_links=[name.lower() for name in dependency_links],
+                       auto_assign=auto_assign_team)
 
 
 def fetch_stories_for_epic(epic_key):
@@ -669,10 +690,6 @@ def has_working_hours(availability):
     return sum(availability.get(d, 0) for d in ("mon", "tue", "wed", "thu", "fri")) > 0
 
 
-# These are the working hours of a person who is not in [team]: 8 hours a day, Monday to Friday.
-OUTSIDE_TEAM_HOURS = {"mon": 8, "tue": 8, "wed": 8, "thu": 8, "fri": 8, "auto_assign": False}
-
-
 def get_earliest_available_member(member_states, team):
     """Return the name of the auto-assign member who becomes free earliest."""
     candidates = [name for name in member_states if team[name].get("auto_assign", True)]
@@ -728,28 +745,39 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
         key, title, epic, assignee, status, start, end
     """
     done_dates = done_dates or {}
-    # Topologically sort so dependencies are always scheduled before dependents
+
+    # Plan the stories in groups, keeping the given order within a group:
+    # done (so they don't inflate epic end dates), started, in the active sprint, the rest.
+    # Started means at least the progress of work_starts_at in [statuses], or above 0 without it.
+    def _group(key):
+        if key not in story_data:
+            return 3
+        fields = story_data[key]["fields"]
+        progress = config.statuses.get(fields.get("status", {}).get("name", "").lower(), 0)
+        if progress >= 1.0:
+            return 0
+        started = (progress >= config.work_start_progress) if config.work_start_progress > 0 else (progress > 0)
+        if started:
+            return 1
+        if in_active_sprint(fields):
+            return 2
+        return 3
+
+    ordered_keys = sorted(ordered_keys, key=_group)
+    # Then make sure dependencies are always scheduled before dependents
     ordered_keys = topological_sort(ordered_keys, config.dependencies)
 
-    # Schedule done tasks first so they don't inflate epic end dates.
-    # Done tasks don't advance resource availability, so this is safe.
-    def _done_first(key):
-        if key not in story_data:
-            return 1
-        status = story_data[key]["fields"].get("status", {}).get("name", "")
-        progress = config.statuses.get(status.lower(), 0)
-        return 0 if progress >= 1.0 else 1
-
-    ordered_keys = sorted(ordered_keys, key=_done_first)
+    # Without auto-assign, stories without a team member are planned one after another
+    # under "Unassigned", on a standard week
+    team = dict(config.team)
+    if not config.auto_assign:
+        team["Unassigned"] = {"mon": 8, "tue": 8, "wed": 8, "thu": 8, "fri": 8, "days_off": config.holidays}
 
     # member_states tracks the next available date per member
     member_states = {}
-    for name in config.team:
-        if has_working_hours(config.team[name]):
-            member_states[name] = next_working_day(config.start_date, config.team[name])
-    # This has the hours of the team members and of the assignees who are not in [team]
-    availability = dict(config.team)
-    outside_hours = dict(OUTSIDE_TEAM_HOURS, days_off=set(config.holidays))
+    for name in team:
+        if has_working_hours(team[name]):
+            member_states[name] = next_working_day(config.start_date, team[name])
 
     scheduled = []
     story_end_dates = {}  # {story_key: end_date} for dependency resolution
@@ -776,28 +804,23 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
         hours = total_hours if progress >= 1.0 else total_hours * (1.0 - progress)
 
         # Determine who works on this story
-        if progress >= 1.0:
-            # A done story keeps its assignee from Jira and takes no time from anyone.
-            # Without Jira dates, it is placed on these standard working days from the plan start.
-            member = None
-            avail = outside_hours
-            cursor = next_working_day(config.start_date, avail)
+        auto_assigned = False
+        if assignee_name in member_states:
+            member = assignee_name
         else:
-            if assignee_name in member_states:
-                member = assignee_name
-            elif assignee_name != "Unassigned" and assignee_name not in config.team:
-                print(f"Warning: assignee '{assignee_name}' is not in [team], so their stories are planned "
-                      f"with 8 hours a day, Monday to Friday. Add them to [team] for their real hours.",
-                      file=sys.stderr)
-                availability[assignee_name] = outside_hours
-                member_states[assignee_name] = next_working_day(config.start_date, outside_hours)
-                member = assignee_name
+            action = "auto-assigning" if config.auto_assign else "planning under 'Unassigned'"
+            if assignee_name in config.team:
+                print(f"Warning: assignee '{assignee_name}' for {story_key} has no working hours, {action}", file=sys.stderr)
+            elif assignee_name != "Unassigned":
+                print(f"Warning: assignee '{assignee_name}' for {story_key} not in [team], {action}", file=sys.stderr)
+            if config.auto_assign:
+                member = get_earliest_available_member(member_states, team)
+                auto_assigned = True
             else:
-                if assignee_name in config.team:
-                    print(f"Warning: assignee '{assignee_name}' for {story_key} has no working hours, auto-assigning", file=sys.stderr)
-                member = get_earliest_available_member(member_states, availability)
-            avail = availability[member]
-            cursor = member_states[member]
+                member = "Unassigned"
+
+        avail = team[member]
+        cursor = member_states[member]
 
         if progress >= 1.0 and story_key in done_dates:
             # A done story is shown on the days it was worked on, from its Jira status history
@@ -846,7 +869,8 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
             "title": title,
             "epic": issue.get("_epic", "(No Epic)"),
             "epic_key": issue.get("_epic_key", ""),
-            "assignee": member or assignee_name,
+            "assignee": member,
+            "auto_assigned": auto_assigned,  # the planner picked the member, not Jira
             "status": status,
             "sprint": sprint,
             "due": issue["fields"].get("duedate") or "",
@@ -854,6 +878,7 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
             "issue_type_icon_url": (issue["fields"].get("issuetype") or {}).get("iconUrl", ""),
             "effort": 0 if progress >= 1.0 else hours,
             "total_hours": total_hours,
+            "points": sp,
             "estimated": sp is not None,
             "start": start_date.isoformat(),
             "end": (end_date + timedelta(days=1)).isoformat(),
@@ -1036,6 +1061,17 @@ def format_last_day(iso_end):
 def format_hours(hours):
     """Return hours as "8h" or "7.5h"."""
     return f"{hours:.0f}h" if hours == int(hours) else f"{hours:.1f}h"
+
+
+def format_points(points):
+    """Return story points as "5" or "0.5", or "" for a story without points."""
+    return "" if points is None else f"{points:g}"
+
+
+def sprint_number(sprint):
+    """Return the number at the end of a sprint name, such as "26" for "DTIC Sprint 26", or the whole name."""
+    match = re.search(r"(\d+)\s*$", sprint)
+    return match.group(1) if match else sprint
 
 
 def format_signed(value, unit):
@@ -1246,7 +1282,8 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     without an image there is shown with an emoji.
     epics_info is {epic key: {key, name, start, due}} from fetch_epics. roadmap_epics lists
     epics without stories; each is shown as a striped bar from its start to its due date.
-    epic_order is the list of epic keys in the order of the configuration file.
+    epic_order is the list of epic keys in the order of the epic rows. Epics that are not in it
+    come after them.
     """
     # Assign colors to epics
     epics_seen = []
@@ -1275,7 +1312,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
         if s["epic"] not in epic_name_to_key and s.get("epic_key"):
             epic_name_to_key[s["epic"]] = s["epic_key"]
 
-    # Order of the epic rows: the epics of the configuration file in its order, then the others
+    # Order of the epic rows: the epics of epic_order in its order, then the others
     epics_info = epics_info or {}
     roadmap_by_key = {r["key"]: r for r in roadmap_epics}
     key_to_name = {key: name for name, key in epic_name_to_key.items()}
@@ -1308,7 +1345,6 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
                 "story_key": row["key"],
                 "progress": 0,
                 "roadmap": True,
-                "is_epic": True,
                 "due_date": row["due"],
             })
             continue
@@ -1337,17 +1373,19 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             total_weight += weight
         epic_progress = weighted_progress / total_weight if total_weight > 0 else 0
 
+        epic_points = sum(s.get("points") or 0 for s in epic_stories)
+
         tasks.append({
             "id": task_id,
             "text": epic_name,
             "start_date": epic_start,
             "end_date": epic_end,
+            "points": format_points(epic_points) if epic_points else "",
             "effort": effort_str,
             "status": "",
             "color": epic_color_map[epic_name],
             "type": "project",
             "open": True,
-            "is_epic": True,
             "icon": ISSUE_TYPE_ICONS["epic"],
             "unestimated": epic_unestimated,
             "icon_url": epic_icon_url,
@@ -1381,9 +1419,16 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             "id": task_id,
             "text": f"{s['key']}: {s['title']}",
             "assignee": s["assignee"],
+            "auto_assigned": s.get("auto_assigned", False),
             "start_date": s["start"],
             "end_date": s["end"],
             "progress": progress,
+            "points": format_points(s.get("points")),
+            "points_value": s.get("points") or 0,
+            "hours": effort,
+            "rank": s.get("rank"),
+            "sprint": sprint_number(s.get("sprint", "")),
+            "sprint_name": s.get("sprint", ""),
             "effort": effort_str,
             "status": s["status"],
             "color": epic_color_map[s["epic"]],
@@ -1488,7 +1533,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
 <link rel="stylesheet" href="https://cdn.dhtmlx.com/gantt/9.0/dhtmlxgantt.css">
 <style>
   body {{ font-family: sans-serif; margin: 20px; }}
-  #gantt_here {{ width: 100%; height: calc(100vh - 110px); }}
+  #gantt_here {{ width: 100%; height: calc(100vh - 150px); }}
   .gantt_task_line.task-done {{ opacity: 0.45; filter: grayscale(60%); }}
   .gantt_task_line.task-done .gantt_task_content {{ text-decoration: line-through; }}
   .gantt_row.task-done-row {{ color: #999; }}
@@ -1505,6 +1550,14 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   }}
   #toolbar button:hover {{ background: #e8e8e8; }}
   #toolbar button.active {{ background: #4e79a7; color: #fff; border-color: #4e79a7; }}
+  #toolbar button:disabled {{ cursor: wait; color: #888; background: #f4f4f4; }}
+  #refresh-status {{ font-size: 12px; color: #c33; }}
+  /* Marks a member the planner picked; the soft blue of the toolbar, quiet next to the grey label */
+  .auto-badge {{
+    display: inline-block; margin-left: 3px; padding: 0 5px; border: 1px solid #c9d7e8; border-radius: 7px;
+    background: #eaf0f7; color: #3d6491; font-size: 9px; font-weight: 600; line-height: 12px;
+    letter-spacing: 0.3px; text-transform: uppercase; vertical-align: 1px; cursor: help;
+  }}
   #show-done-wrap {{ display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }}
   #search-wrap {{ display: flex; align-items: center; gap: 6px; margin-left: auto; }}
   #search-input {{
@@ -1513,6 +1566,16 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   }}
   #search-input:focus {{ outline: none; border-color: #4e79a7; }}
   #search-count {{ font-size: 12px; color: #666; min-width: 70px; }}
+  #member-filter {{ margin-bottom: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; }}
+  #member-filter .filter-label {{ color: #666; margin-right: 4px; }}
+  .member-badge {{
+    padding: 3px 10px; border: 1px solid #ccc; border-radius: 12px;
+    background: #fff; cursor: pointer; font-size: 12px;
+  }}
+  .member-badge:hover {{ background: #e8e8e8; }}
+  .member-badge.active {{ background: #4e79a7; color: #fff; border-color: #4e79a7; }}
+  .member-badge .count {{ margin-left: 4px; opacity: 0.7; }}
+  #member-clear {{ border: none; background: none; color: #4e79a7; cursor: pointer; font-size: 12px; text-decoration: underline; }}
   .gantt_task_line.search-match {{ outline: 3px solid #ffd400; outline-offset: 2px; z-index: 50; }}
   .gantt_task_line.search-dim {{ opacity: 0.2; }}
   .gantt_row.search-match-row {{ background: #fff7c2 !important; font-weight: 600; }}
@@ -1523,16 +1586,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   .gantt_task_line.change-removed {{ opacity: 0.5; }}
   .gantt_task_line.roadmap-epic {{ opacity: 0.75;
     background-image: repeating-linear-gradient(45deg, rgba(255,255,255,0.45) 0 6px, transparent 6px 12px); }}
-  .gantt_task_line.epic-bar .gantt_task_content {{ font-weight: 600; }}
-  .gantt_task_line.due-late {{ box-shadow: 0 0 0 2px #d62728; animation: due-late-glow 0.5s ease-in-out infinite; }}
-  @keyframes due-late-glow {{
-    0%, 100% {{ box-shadow: 0 0 0 2px #d62728, 0 0 2px 1px rgba(214, 39, 40, 0.3); }}
-    50% {{ box-shadow: 0 0 0 2px #d62728, 0 0 8px 4px rgba(214, 39, 40, 0.6); }}
-  }}
-  @media (prefers-reduced-motion: reduce) {{
-    .gantt_task_line.due-late {{ animation: none; }}
-  }}
-  .gantt_task_line.change-late {{ box-shadow: 0 0 0 2px #ff8c00; }}
+  .gantt_task_line.change-late {{ box-shadow: 0 0 0 2px #d62728; }}
   .delta-up {{ color: #c62828; font-weight: 600; }}
   .delta-down {{ color: #2e7d32; font-weight: 600; }}
   .due-marker {{ position: absolute; width: 10px; height: 10px; background: #d62728; border: 1px solid #fff;
@@ -1572,6 +1626,8 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
 <body>
 <h2>Gantt Chart — {date.today()}</h2>
 <div id="toolbar">
+  <button id="refresh-button" hidden onclick="refreshChart()" title="Fetch the stories from Jira again and redraw the chart">Refresh from Jira</button>
+  <span id="refresh-status"></span>
   <div class="zoom-buttons">
     <button onclick="setZoom('day')">Day</button>
     <button onclick="setZoom('week')">Week</button>
@@ -1579,13 +1635,37 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     <button onclick="setZoom('quarter')">Quarter</button>
     <button onclick="zoomToFit()">Fit All</button>
   </div>
-  <label id="show-done-wrap"><input type="checkbox" id="show-done" onchange="onShowDoneChange()"> Show done stories</label>
+  <label id="show-done-wrap"><input type="checkbox" id="show-done" onchange="applyFilters()"> Show done stories</label>
   {changes_toggle}
   <div id="search-wrap">
     <input id="search-input" type="search" placeholder="Search stories, for example PROJ-123" oninput="onSearchInput()" onkeydown="if(event.key==='Escape'){{this.value='';onSearchInput();}}">
     <span id="search-count"></span>
   </div>
 </div>
+<div id="member-filter"></div>
+<script>
+// The refresh button works only when the page comes from "jira_smurf.py serve", not from a file
+if (location.protocol.startsWith("http")) {{
+  document.getElementById("refresh-button").hidden = false;
+}}
+function refreshChart() {{
+  const button = document.getElementById("refresh-button");
+  const status = document.getElementById("refresh-status");
+  button.disabled = true;
+  button.textContent = "Refreshing…";
+  status.textContent = "";
+  fetch("refresh", {{method: "POST", headers: {{"X-Jira-Smurf": "refresh"}}}})
+    .then(response => response.text().then(text => {{
+      if (!response.ok) throw new Error(text || response.statusText);
+      location.reload();
+    }}))
+    .catch(error => {{
+      button.disabled = false;
+      button.textContent = "Refresh from Jira";
+      status.textContent = "Refresh failed: " + error.message;
+    }});
+}}
+</script>
 <div id="gantt_here"></div>
 {summary_html}
 {trend}
@@ -1628,10 +1708,20 @@ gantt.config.columns = [
       var image = typeIconImages[task.icon_url];
       var icon = image ? "<img class='type-icon' src='" + image + "' alt=''>" :
         task.icon ? "<span class='type-icon'>" + task.icon + "</span>" : "";
-      var title = task.is_epic ? "<b>" + task.text + "</b>" : task.text;
-      return icon + "<span title='" + task.text.replace(/'/g, "&#39;") + "'>" + title + "</span>";
+      return icon + "<span title='" + task.text.replace(/'/g, "&#39;") + "'>" + task.text + "</span>";
+    }} }},
+  {{name: "rank", label: "Rank", align: "center", width: 60, resize: true,
+    template: function(task) {{
+      return task.rank ? "<span title='Position of this story in the Jira backlog, among the stories of the plan'>" +
+        task.rank + "</span>" : "";
     }} }},
   {{name: "status", label: "Status", align: "left", width: 120, resize: true}},
+  {{name: "points", label: "Points", align: "center", width: 70, resize: true,
+    template: function(task) {{ return task.points || ""; }} }},
+  {{name: "sprint", label: "Sprint", align: "center", width: 70, resize: true,
+    template: function(task) {{
+      return task.sprint ? "<span title='" + task.sprint_name.replace(/'/g, "&#39;") + "'>" + task.sprint + "</span>" : "";
+    }} }},
   {{name: "effort", label: "Remaining", align: "center", width: 100, resize: true, template: effortText}}{moved_column}
 ];
 gantt.templates.tooltip_text = function(start, end, task) {{
@@ -1720,18 +1810,30 @@ function setZoom(level) {{
   }});
 }}
 var hideDone = false;
+var selectedMembers = {{}};  // {{assignee: true}} for the team members whose stories are shown; empty shows all
+var memberCounts = {{}};  // {{assignee: count element}} in the badges
 var epicDates = {{}};  // {{epicId: {{start_date, end_date}}}} with the dates from all stories
+var epicTotals = {{}};  // {{epicId: {{effort, points}}}} with the totals of all stories
+function isFiltering() {{
+  return hideDone || Object.keys(selectedMembers).length > 0;
+}}
+function isStoryShown(task) {{
+  if (hideDone && task.progress >= 1) return false;
+  return Object.keys(selectedMembers).length === 0 || !!selectedMembers[task.assignee];
+}}
 function isTaskShown(task) {{
   if (task.removed) return showChanges;
-  if (!hideDone) return true;
-  if (task.type === "project") return !!openStoryDates(task.id);
-  return task.progress < 1;
+  if (!isFiltering()) return true;
+  // An epic without stories has no team member
+  if (task.roadmap) return Object.keys(selectedMembers).length === 0;
+  if (gantt.hasChild(task.id)) return !!shownStoryDates(task.id);
+  return isStoryShown(task);
 }}
-// Earliest start and latest end of the stories of an epic that are not done, or null.
-function openStoryDates(epicId) {{
+// Earliest start and latest end of the stories of an epic that pass the filters, or null.
+function shownStoryDates(epicId) {{
   var start = null, end = null;
   gantt.eachTask(function(child) {{
-    if (child.progress >= 1) return;
+    if (!isStoryShown(child)) return;
     if (!start || child.start_date < start) start = child.start_date;
     if (!end || child.end_date > end) end = child.end_date;
   }}, epicId);
@@ -1740,17 +1842,90 @@ function openStoryDates(epicId) {{
 gantt.attachEvent("onBeforeTaskDisplay", function(id, task) {{
   return isTaskShown(task);
 }});
-function onShowDoneChange() {{
+// Remaining hours and points of the stories of an epic that pass the filters.
+// The hours get a "?" when one of those stories has no estimate.
+function shownStoryTotals(epicId) {{
+  var hours = 0, points = 0, guess = false;
+  gantt.eachTask(function(child) {{
+    if (!isStoryShown(child)) return;
+    hours += child.hours || 0;
+    points += child.points_value || 0;
+    if (child.unestimated) guess = true;
+  }}, epicId);
+  return {{
+    effort: Math.round(hours * 10) / 10 + "h" + (guess ? "?" : ""),
+    points: points ? String(Math.round(points * 100) / 100) : "",
+  }};
+}}
+// Show in each badge the number of stories of that member that pass the done filter.
+function updateMemberCounts() {{
+  var counts = {{}};
+  gantt.eachTask(function(task) {{
+    if (!task.assignee || (hideDone && task.progress >= 1)) return;
+    counts[task.assignee] = (counts[task.assignee] || 0) + 1;
+  }});
+  Object.keys(memberCounts).forEach(function(name) {{
+    memberCounts[name].textContent = counts[name] || 0;
+  }});
+}}
+// One badge per assignee of the stories, "Unassigned" last. A click selects or deselects that member.
+function buildMemberFilter() {{
+  var counts = {{}};
+  gantt.eachTask(function(task) {{
+    if (task.assignee) counts[task.assignee] = (counts[task.assignee] || 0) + 1;
+  }});
+  var names = Object.keys(counts).sort(function(a, b) {{
+    if (a === "Unassigned" || b === "Unassigned") return a === "Unassigned" ? 1 : -1;
+    return a.localeCompare(b);
+  }});
+  var bar = document.getElementById("member-filter");
+  var label = document.createElement("span");
+  label.className = "filter-label";
+  label.textContent = "Team member:";
+  bar.appendChild(label);
+  names.forEach(function(name) {{
+    var badge = document.createElement("button");
+    badge.className = "member-badge";
+    badge.textContent = name;
+    var count = document.createElement("span");
+    count.className = "count";
+    memberCounts[name] = count;
+    badge.appendChild(count);
+    badge.onclick = function() {{
+      if (selectedMembers[name]) delete selectedMembers[name]; else selectedMembers[name] = true;
+      badge.classList.toggle("active", !!selectedMembers[name]);
+      applyFilters();
+    }};
+    bar.appendChild(badge);
+  }});
+  var clear = document.createElement("button");
+  clear.id = "member-clear";
+  clear.textContent = "Show all";
+  clear.onclick = function() {{
+    selectedMembers = {{}};
+    bar.querySelectorAll(".member-badge").forEach(function(b) {{ b.classList.remove("active"); }});
+    applyFilters();
+  }};
+  bar.appendChild(clear);
+}}
+function applyFilters() {{
   hideDone = !document.getElementById("show-done").checked;
+  document.getElementById("member-clear").style.display = Object.keys(selectedMembers).length ? "" : "none";
   gantt.eachTask(function(task) {{
     if (task.parent !== gantt.config.root_id || task.removed || task.roadmap) return;
     if (!epicDates[task.id]) epicDates[task.id] = {{ start_date: task.start_date, end_date: task.end_date }};
-    var dates = hideDone ? openStoryDates(task.id) : null;
-    // A "project" task takes its dates from all its children, so use a plain task while done stories are hidden.
+    var dates = isFiltering() ? shownStoryDates(task.id) : null;
+    // A "project" task takes its dates from all its children, so use a plain task while stories are hidden.
     task.type = dates ? "task" : "project";
     task.start_date = (dates || epicDates[task.id]).start_date;
     task.end_date = (dates || epicDates[task.id]).end_date;
+    // The totals of the epic row count only the stories that are shown
+    if (!epicTotals[task.id]) epicTotals[task.id] = {{ effort: task.effort, points: task.points }};
+    var totals = isFiltering() ? shownStoryTotals(task.id) : epicTotals[task.id];
+    task.effort = totals.effort;
+    task.points = totals.points;
   }});
+  updateMemberCounts();
   zoomToFit();
   gantt.render();
 }}
@@ -1793,12 +1968,6 @@ function zoomToFit() {{
 var searchTerm = "";
 var searchMatchIds = {{}};      // {{taskId: true}} for tasks whose own text matches
 var searchVisibleIds = {{}};    // {{taskId: true}} for matches + their ancestors (kept un-dimmed)
-// True when the bar ends after the end of the due date of the task.
-function endsAfterDueDate(task) {{
-  if (!task.due_date) return false;
-  var dayAfterDue = gantt.date.add(gantt.date.str_to_date("%Y-%m-%d")(task.due_date), 1, "day");
-  return task.end_date > dayAfterDue;
-}}
 function changeBarClass(task) {{
   if (!showChanges) return "";
   if (task.removed) return " change-removed";
@@ -1813,11 +1982,8 @@ function joinClasses() {{
   return Array.prototype.filter.call(arguments, Boolean).join(" ");
 }}
 gantt.templates.task_class = function(start, end, task) {{
-  // Red for ending after the due date wins over orange for being behind the baseline
-  var pastDueDate = !task.removed && task.progress < 1 && endsAfterDueDate(task);
-  var base = (task.progress >= 1 ? "clickable-task task-done" : "clickable-task") +
-    (pastDueDate ? " due-late" : changeBarClass(task)) +
-    (task.roadmap ? " roadmap-epic" : "") + (task.is_epic ? " epic-bar" : "");
+  var base = (task.progress >= 1 ? "clickable-task task-done" : "clickable-task") + changeBarClass(task) +
+    (task.roadmap ? " roadmap-epic" : "");
   if (!searchTerm) return base;
   if (searchMatchIds[task.id]) return base + " search-match";
   if (searchVisibleIds[task.id]) return base;
@@ -1875,7 +2041,13 @@ gantt.templates.task_text = function(start, end, task) {{
 }};
 gantt.templates.rightside_text = function(start, end, task) {{
   var parts = [];
-  if (task.assignee) parts.push(task.assignee);
+  if (task.assignee) {{
+    var name = task.assignee;
+    if (task.auto_assigned) {{
+      name += " <span class='auto-badge' title='Not assigned in Jira: the planner picked the team member who is free first'>auto</span>";
+    }}
+    parts.push(name);
+  }}
   parts.push(gantt.date.date_to_str("%d %M")(end));
   return "<span style='font-size:11px;color:#666;'>" + parts.join(" \u2022 ") + "</span>";
 }};
@@ -1968,7 +2140,8 @@ gantt.addMarker({{ start_date: new Date(), css: "today-marker", text: "Today" }}
   }});
 }})();
 gantt.parse({{ data: {tasks_json}, links: {links_json} }});
-onShowDoneChange();
+buildMemberFilter();
+applyFilters();
 (function() {{
   var svg = document.getElementById("trend-svg");
   if (!svg) return;
@@ -2122,16 +2295,20 @@ def run_gantt(config_path, history_dir=None, since=None):
             print(f"  {missing} done {'story has' if missing == 1 else 'stories have'} no change to a done status "
                   f"in the history, so the plan start is used", file=sys.stderr)
 
-    # The planner takes stories in this order; the chart rows keep the order of the configuration file
+    # The planner takes stories in this order; the story rows keep the order of the configuration file
+    # The backlog order also gives the Rank column of the chart
     schedule_keys = ordered_keys
+    print("Fetching the backlog order...", file=sys.stderr)
+    positions = fetch_backlog_order(ordered_keys) if ordered_keys else {}
     if config.use_backlog_order:
-        print("Fetching the backlog order...", file=sys.stderr)
-        positions = fetch_backlog_order(ordered_keys)
         schedule_keys = sorted(ordered_keys, key=lambda key: positions.get(key, len(positions)))
 
     scheduled = schedule_stories(config, story_data, schedule_keys, done_dates)
     config_position = {key: i for i, key in enumerate(ordered_keys)}
     scheduled.sort(key=lambda s: config_position[s["key"]])
+    for s in scheduled:
+        # 1 is the highest story of the plan in the Jira backlog
+        s["rank"] = positions[s["key"]] + 1 if s["key"] in positions else None
     print(f"Scheduled {len(scheduled)} stories.", file=sys.stderr)
     changes = None
     snapshots = []
@@ -2183,6 +2360,13 @@ def run_gantt(config_path, history_dir=None, since=None):
         print(f"  Epic {key} has no stories yet, showing its dates from Jira", file=sys.stderr)
         roadmap_epics.append(info)
 
+    # The epic rows follow the configuration file, or the Jira rank of the epics with use_backlog_order
+    epic_order = list(config.epics)
+    if config.use_backlog_order and epic_keys:
+        print("Fetching the rank of the epics...", file=sys.stderr)
+        epic_positions = fetch_backlog_order(epic_keys)
+        epic_order = sorted(epic_keys, key=lambda key: epic_positions.get(key, len(epic_positions)))
+
     # Put the Jira issue type icons into the page, so it shows them without a Jira login
     epic_icon_url = find_epic_icon_url(story_data.values())
     icon_urls = [s["issue_type_icon_url"] for s in scheduled if s["issue_type_icon_url"]]
@@ -2196,7 +2380,7 @@ def run_gantt(config_path, history_dir=None, since=None):
         icon_images = fetch_icon_images(icon_urls)
 
     write_gantt_html(scheduled, config.statuses, config.dependencies, config.holidays, config.status_colors,
-                     changes, snapshots, icon_images, epic_icon_url, epics_info, roadmap_epics, config.epics)
+                     changes, snapshots, icon_images, epic_icon_url, epics_info, roadmap_epics, epic_order)
 
 
 def run_velocity(config_path, weeks):
@@ -2335,6 +2519,120 @@ def write_html(rows, columns):
     print("</body></html>")
 
 
+class _Tee(io.TextIOBase):
+    """Write to several streams at once."""
+
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, text):
+        for stream in self.streams:
+            stream.write(text)
+        return len(text)
+
+    def flush(self):
+        for stream in self.streams:
+            stream.flush()
+
+
+def build_gantt_page(config_path, history_dir=None, since=None):
+    """Run the gantt command and return (HTML of the chart, None), or (None, error message)."""
+    page, log = io.StringIO(), io.StringIO()
+    try:
+        with contextlib.redirect_stdout(page), contextlib.redirect_stderr(_Tee(sys.stderr, log)):
+            run_gantt(config_path, history_dir, since)
+    except (Exception, SystemExit) as e:
+        # Errors in the configuration print a message and exit; Jira errors raise an exception
+        lines = [line for line in log.getvalue().splitlines() if line.strip()]
+        message = lines[-1] if isinstance(e, SystemExit) and lines else f"{type(e).__name__}: {e}"
+        print(f"Refresh failed: {message}", file=sys.stderr)
+        return None, message
+    return page.getvalue(), None
+
+
+def run_serve(config_path, history_dir, since, port, open_browser):
+    """Serve the Gantt chart on localhost. Its refresh button fetches the stories from Jira again.
+
+    With history_dir, each refresh also stores a plan snapshot and the chart as
+    gantt-YYYY-MM-DD.html there, like generate-gantt.sh does.
+    """
+    state = {"page": None}
+    lock = threading.Lock()
+
+    def refresh():
+        page, error = build_gantt_page(config_path, history_dir, since)
+        if page is None:
+            return error
+        state["page"] = page
+        if history_dir:
+            path = os.path.join(history_dir, f"gantt-{date.today()}.html")
+            with open(path, "w", encoding="utf-8", newline="") as f:
+                f.write(page)
+            print(f"Wrote {path}", file=sys.stderr)
+        return None
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def send_text(self, status, text, content_type="text/plain"):
+            body = text.encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", f"{content_type}; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            if self.path not in ("/", "/index.html"):
+                self.send_text(404, "Not found")
+            elif state["page"] is None:
+                self.send_text(503, "The chart is not ready. See the terminal for the error, "
+                                    "then click refresh or restart the server.")
+            else:
+                self.send_text(200, state["page"], "text/html")
+
+        def do_POST(self):
+            # The custom header keeps other web sites from starting a refresh: browsers do not
+            # send it across sites without a CORS answer, which this server never gives.
+            if self.path != "/refresh" or self.headers.get("X-Jira-Smurf") != "refresh":
+                self.send_text(404, "Not found")
+                return
+            if not lock.acquire(blocking=False):
+                # A refresh is already running; wait for it instead of starting another one
+                with lock:
+                    pass
+                self.send_text(200, "ok")
+                return
+            try:
+                error = refresh()
+            finally:
+                lock.release()
+            if error:
+                self.send_text(500, error)
+            else:
+                self.send_text(200, "ok")
+
+        def log_message(self, format, *args):
+            pass  # keep the terminal for the progress of the refresh
+
+    if history_dir:
+        os.makedirs(history_dir, exist_ok=True)
+    print("Building the chart...", file=sys.stderr)
+    refresh()
+
+    # Only this computer can open the chart: it shows Jira data, fetched with your token
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    url = f"http://localhost:{port}/"
+    print(f"Serving the Gantt chart at {url} — press Ctrl+C to stop", file=sys.stderr)
+    if open_browser:
+        webbrowser.open(url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nStopped.", file=sys.stderr)
+    finally:
+        server.server_close()
+
+
 def parse_since(value):
     """Return the --since value as a date, or "last" when it is "last"."""
     if value == "last":
@@ -2369,6 +2667,18 @@ def build_parser():
                               help="show the changes since the latest snapshot on or before this date; "
                                    "without a date, since the latest snapshot before the current day")
 
+    serve_parser = subparsers.add_parser("serve", help="serve the Gantt chart on localhost, with a button to refresh it from Jira")
+    serve_parser.add_argument("-c", "--config", metavar="FILE", default="gantt.toml",
+                              help="planning configuration (default: gantt.toml)")
+    serve_parser.add_argument("--history", metavar="DIR",
+                              help="on each refresh, store a snapshot of the plan and the chart in DIR, and show "
+                                   "the changes and the trend from the snapshots there")
+    serve_parser.add_argument("--since", metavar="YYYY-MM-DD", nargs="?", const="last", type=parse_since,
+                              help="show the changes since the latest snapshot on or before this date; "
+                                   "without a date, since the latest snapshot before the current day")
+    serve_parser.add_argument("--port", metavar="N", type=int, default=8000, help="port to listen on (default: 8000)")
+    serve_parser.add_argument("--no-open", action="store_true", help="do not open the chart in the browser")
+
     velocity_parser = subparsers.add_parser("velocity", help="measure the hours per story point of the last weeks")
     velocity_parser.add_argument("-c", "--config", metavar="FILE", default="gantt.toml",
                                  help="planning configuration with the team (default: gantt.toml)")
@@ -2393,6 +2703,9 @@ def main():
         return
     if args.command == "velocity":
         run_velocity(args.config, args.weeks)
+        return
+    if args.command == "serve":
+        run_serve(args.config, args.history, args.since, args.port, not args.no_open)
         return
 
     output = open(args.output, "w", encoding="utf-8", newline="") if args.output else sys.stdout

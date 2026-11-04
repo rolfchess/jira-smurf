@@ -51,7 +51,24 @@ python jira_smurf.py --help
 
 `./generate-gantt.sh` writes the chart to `plannings/gantt-YYYY-MM-DD.html` and opens it. It uses
 `--history plannings`, and it passes extra arguments such as `--since` or `--since 2026-10-01` to
-the `gantt` command. It uses `open`, so it works on macOS.
+the `gantt` command. It uses `open`, so it works on macOS. If there is a virtual environment in
+`.venv`, the script uses its Python, so you do not have to activate it first.
+
+### Refresh the chart from the browser
+
+```bash
+./serve-gantt.sh                                # or: python jira_smurf.py serve --history plannings
+python jira_smurf.py serve --port 8080 --no-open
+```
+
+`serve` builds the chart, serves it at `http://localhost:8000/` and opens it in the browser. The
+page then has a **Refresh from Jira** button: it fetches the stories again, rebuilds the chart and
+reloads the page, so you do not have to go back to the command line. Each refresh reads
+`gantt.toml` again, so changes to it are picked up too. With `--history`, each refresh also stores
+the snapshot and the chart in that directory, like `generate-gantt.sh`. Stop the server with Ctrl+C.
+
+The server only listens on this computer (`127.0.0.1`), because the chart shows Jira data fetched
+with your token. A chart opened as a file has no refresh button.
 
 Progress messages go to standard error, so they do not end up in the output.
 
@@ -78,11 +95,12 @@ example.
 | `include_open_sprints`   | `true` also adds all stories in the active sprint.                                                                                                                             |
 | `include_future_sprints` | `true` also adds all stories in future sprints.                                                                                                                                |
 | `dependency_links`       | This is the list of Jira link types that work as dependencies. The default is `["Blocks"]`. A story that "is blocked by" another story starts after that story is finished. A type in this list must work like Blocks. Use `[]` to ignore Jira links. |
-| `use_backlog_order`      | `true` plans the stories in the order of the Jira backlog. The rows of the chart keep the order of this file.                                                                  |
+| `use_backlog_order`      | `true` plans the stories in the order of the Jira backlog, and orders the epic rows of the chart by their rank in Jira.                                                        |
+| `auto_assign`            | `false` gives no stories to team members that are not assigned to them in Jira. Such stories are planned one after another under "Unassigned", 8 hours a day. The default is `true`. |
 | `work_starts_at`         | This is the status where work on a story starts, for example `"In Progress"`. A done story's bar starts on the first change to this status, or to a status with more progress. |
 | `holidays`               | This is a list of days off for the whole team, for example `["2026-12-25", "2026-12-26"]`.                                                                                     |
 | `[team."Name"]`          | Hours per weekday (`mon` to `fri`) for each team member. The name must match the display name in Jira.                                                                         |
-| `auto_assign`            | Per team member. `false` means the member gets no unassigned stories. Such a member may have no hours.                                                                         |
+| `auto_assign`            | Per team member. `false` means the member gets no unassigned stories. Such a member may have no hours. This has no effect when the top-level `auto_assign` is `false`.                                                                       |
 | `days_off`               | This is set per team member. It is a list of days off, for example `["2026-12-10", "2026-12-18 to 2027-01-01"]`. A range includes both days. No work is planned on those days. |
 | `[statuses]`             | Progress in percent for each Jira status. A story at 100 is done.                                                                                                              |
 | `[status_colors]`        | This sets a row background color for each Jira status, for example `"Blocked" = "#ffcccc"`.                                                                                    |
@@ -92,15 +110,18 @@ example.
 How the planning works:
 
 - Stories are planned in the order of the file: epics first, then single stories, then sprint
-  stories. With `use_backlog_order = true`, they are planned in the order of the Jira backlog. The
-  rows of the chart always follow the order of the file.
+  stories. With `use_backlog_order = true`, they are planned in the order of the Jira backlog, and
+  the epic rows of the chart follow the rank of the epics in Jira, with stories without an epic
+  last. Otherwise the epic rows follow the order of the file. The Rank column shows the position
+  of each story in the Jira backlog, among the stories of the plan (1 is the highest).
+- Before that order, the planner groups the stories by their status in `[statuses]`: first done
+  stories (100), then started stories (at least the value of `work_starts_at`, or above 0 without
+  it), then stories in the active sprint, then all other stories. So work that is already started
+  or planned in the sprint is planned before backlog stories, even when those rank higher in Jira.
 - A story never starts before the stories in its `depends_on` list are finished. The same holds for stories that block it in Jira, with a link type from `dependency_links`. Both kinds of dependencies have an arrow in the chart. Links to stories that are not in the plan are ignored.
 - A story assigned in Jira to a team member goes to that member. Other stories go to the auto-assign
-  member who is free first.
-- A story assigned in Jira to someone who is not in `[team]` keeps that assignee. That person is
-  planned with 8 hours a day, Monday to Friday. They never get stories without an assignee. Add them
-  to `[team]` to plan them with their real hours.
-- A done story keeps its assignee from Jira. It does not use the hours of anyone in the team.
+  member who is free first. Such a story has an `AUTO` badge after the name in the chart. With
+  `auto_assign = false`, they go to "Unassigned" instead.
 - Remaining work is the estimate times (1 minus the progress of the status).
 - A story without story points gets `default_hours`. Its remaining hours have a question mark, for
   example `40h?`. The total of its epic has a question mark too.
@@ -117,7 +138,10 @@ How the planning works:
   done story without such a change is placed at the start of the plan.
 
 In the chart you can zoom, search for a story and show or hide done stories. Done stories are hidden
-at first. Click a bar to open the story in Jira. The buttons in the Story column header collapse or
+at first. Click a team member badge above the table to show only the stories of that member. You can
+select more than one member, and "Unassigned". The epic rows then show the points and remaining hours
+of the stories that are shown. The Points and Sprint columns show the story points and the number of
+the last sprint of each story. Click a bar to open the story in Jira. The buttons in the Story column header collapse or
 expand all epics. Each title in the Story column starts with the icon of its Jira issue type. The
 run downloads these icons from Jira and puts them in the page, so the page shows them without a Jira
 login. If an icon cannot be downloaded, the page shows an emoji instead: 📖 epic, 🔖 story, 🐛 bug,
@@ -125,8 +149,7 @@ login. If an icon cannot be downloaded, the page shows an emoji instead: 📖 ep
 support request, 🧹 technical debt and 📄 any other type. In the day view, weekends and holidays
 have a gray background. When a story or epic has a due date in Jira, the chart shows a red diamond
 on its row. The diamond is at the end of the due date. The bar of the epic will grow past the due
-date according to the planned stories. A story or epic that is not done and ends after its due date
-has a red outline. Epic titles are bold.
+date according to the planned stories.
 
 ### Changes and trend
 
@@ -146,8 +169,7 @@ The checkbox "Show changes since …" in the toolbar turns these marks on and of
   `16h +8h`.
 - A thin gray bar under a story or epic shows its dates in the baseline.
 - The Moved column shows how many working days the end date moved.
-- A story that the baseline planned to be done by now, but that is still open, has an orange
-  outline. If it also ends after its due date, the outline is red.
+- A story that the baseline planned to be done by now, but that is still open, has a red outline.
 - Open stories that are no longer in the plan are listed in a gray group at the end of the chart.
 
 Below the chart, a summary shows how far the plan end moved and why: new stories, changed estimates,
