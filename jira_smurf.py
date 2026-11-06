@@ -80,7 +80,7 @@ def jira_get(path, params=None):
 def fetch_stories():
     """Fetch all stories for the project, paginating through results."""
     jql = f"project = {JIRA_PROJECT} AND issuetype = Story ORDER BY key ASC"
-    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10028"
+    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10016"
     issues = []
     next_page_token = None
 
@@ -130,7 +130,7 @@ def resolve_epic_name(issue):
 
 def get_story_points(fields):
     """Extract story points, trying the configured field and common defaults."""
-    for field_name in (STORY_POINTS_FIELD, "story_points", "customfield_10028"):
+    for field_name in (STORY_POINTS_FIELD, "story_points", "customfield_10016"):
         val = fields.get(field_name)
         if val is not None:
             return str(val).replace(".", ",")
@@ -164,7 +164,7 @@ def get_assignee(fields):
 
 def get_story_points_numeric(fields):
     """Extract story points as a float, or None if not set."""
-    for field_name in (STORY_POINTS_FIELD, "story_points", "customfield_10028"):
+    for field_name in (STORY_POINTS_FIELD, "story_points", "customfield_10016"):
         val = fields.get(field_name)
         if val is not None:
             try:
@@ -371,7 +371,7 @@ def fetch_stories_for_epic(epic_key):
     Tries next-gen (parent) first, falls back to classic (Epic Link).
     Returns list of issue dicts.
     """
-    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10028,duedate,issuetype,issuelinks"
+    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10016,duedate,issuetype,issuelinks"
 
     for jql in (
         f"parent = {epic_key} AND issuetype = Story ORDER BY key ASC",
@@ -410,7 +410,7 @@ def fetch_stories_by_keys(story_keys, warn_missing=True):
     """
     keys_str = ", ".join(story_keys)
     jql = f"key in ({keys_str})"
-    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10028,duedate,issuetype,issuelinks"
+    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10016,duedate,issuetype,issuelinks"
     issues = []
     next_page_token = None
 
@@ -461,7 +461,7 @@ def fetch_finished_stories(start, end):
     """Fetch the stories of the project that moved to a done status from start up to end (not included)."""
     jql = (f'project = {JIRA_PROJECT} AND issuetype = Story AND statusCategory = Done '
            f'AND statusCategoryChangedDate >= "{start}" AND statusCategoryChangedDate < "{end}" ORDER BY key ASC')
-    fields = f"summary,assignee,statuscategorychangedate,{STORY_POINTS_FIELD},customfield_10028"
+    fields = f"summary,assignee,statuscategorychangedate,{STORY_POINTS_FIELD},customfield_10016"
     issues = []
     next_page_token = None
     while True:
@@ -485,7 +485,7 @@ def fetch_sprint_stories(include_open, include_future):
         sprint_functions.append("futureSprints()")
     sprint_clause = " OR ".join(f"sprint in {f}" for f in sprint_functions)
     jql = f"project = {JIRA_PROJECT} AND issuetype = Story AND ({sprint_clause}) ORDER BY key ASC"
-    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10028,duedate,issuetype,issuelinks"
+    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10016,duedate,issuetype,issuelinks"
     issues = []
     next_page_token = None
 
