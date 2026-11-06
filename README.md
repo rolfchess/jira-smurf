@@ -25,7 +25,7 @@ Put your values in `.env`:
 | `JIRA_EMAIL`              | Your Atlassian account email                                                                                                       |
 | `JIRA_API_TOKEN`          | API token from [Atlassian API tokens](https://id.atlassian.com/manage-profile/security/api-tokens)                                 |
 | `JIRA_PROJECT`            | Project key, for example `PROJ`                                                                                                    |
-| `JIRA_STORY_POINTS_FIELD` | _(Optional)_ Field name for story points. The default is `story_points`. The tool also tries `customfield_10028`.                  |
+| `JIRA_STORY_POINTS_FIELD` | _(Optional)_ Field name for story points. The default is `story_points`. The tool also tries `customfield_10016` (Story point estimate). |
 | `JIRA_SPRINT_FIELD`       | _(Optional)_ Field name for the sprint. The default is `customfield_10020`.                                                        |
 | `JIRA_EXCLUDE_STATUSES`   | _(Optional)_ Comma-separated statuses to leave out of the CSV and HTML export, for example `Done,Cancelled`. Case does not matter. |
 | `JIRA_HIGHLIGHT_RULES`    | _(Optional)_ Row colours for the HTML export, for example `Assignee=Alice:yellow\|Status=Blocked:#ffcccc`.                         |
@@ -122,6 +122,8 @@ How the planning works:
 - A story assigned in Jira to a team member goes to that member. Other stories go to the auto-assign
   member who is free first. Such a story has an `AUTO` badge after the name in the chart. With
   `auto_assign = false`, they go to "Unassigned" instead.
+- An open story has a grey badge after the name with its age: the number of days since it was
+  created in Jira, for example `45d`. Hover over it to see the date. Done stories have no age badge.
 - Remaining work is the estimate times (1 minus the progress of the status).
 - A story without story points gets `default_hours`. Its remaining hours have a question mark, for
   example `40h?`. The total of its epic has a question mark too.
