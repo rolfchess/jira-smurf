@@ -98,6 +98,7 @@ example.
 | `use_backlog_order`      | `true` plans the stories in the order of the Jira backlog, and orders the epic rows of the chart by their rank in Jira.                                                        |
 | `auto_assign`            | `false` gives no stories to team members that are not assigned to them in Jira. Such stories are planned one after another under "Unassigned", 8 hours a day. The default is `true`. |
 | `work_starts_at`         | This is the status where work on a story starts, for example `"In Progress"`. A done story's bar starts on the first change to this status, or to a status with more progress. |
+| `implementation_status`  | This setting is optional. It is a status from `[statuses]`, for example `"Implementation"`. An open story that is at this status or a later one gets a badge such as `impl 3/2d`: the working days since it started in exactly this status, and its estimate in working days of 8 hours. |
 | `holidays`               | This is a list of days off for the whole team, for example `["2026-12-25", "2026-12-26"]`.                                                                                     |
 | `[team."Name"]`          | Hours per weekday (`mon` to `fri`) for each team member. The name must match the display name in Jira.                                                                         |
 | `auto_assign`            | Per team member. `false` means the member gets no unassigned stories. Such a member may have no hours. This has no effect when the top-level `auto_assign` is `false`.                                                                       |
@@ -112,8 +113,7 @@ How the planning works:
 - Stories are planned in the order of the file: epics first, then single stories, then sprint
   stories. With `use_backlog_order = true`, they are planned in the order of the Jira backlog, and
   the epic rows of the chart follow the rank of the epics in Jira, with stories without an epic
-  last. Otherwise the epic rows follow the order of the file. The Rank column shows the position
-  of each story in the Jira backlog, among the stories of the plan (1 is the highest).
+  last. Otherwise the epic rows follow the order of the file.
 - Before that order, the planner groups the stories by their status in `[statuses]`: first done
   stories (100), then started stories (at least the value of `work_starts_at`, or above 0 without
   it), then stories in the active sprint, then all other stories. So work that is already started
@@ -124,16 +124,29 @@ How the planning works:
   `auto_assign = false`, they go to "Unassigned" instead.
 - An open story has a grey badge after the name with its age: the number of days since it was
   created in Jira, for example `45d`. Hover over it to see the date. Done stories have no age badge.
+- With `implementation_status` set, an open story also has a badge that compares the time in
+  implementation with the estimate, for example `impl 3/2d`: 3 working days since it started in that
+  status, and an estimate of 2 working days (16 hours at 8 hours a day). Weekends and holidays don't count.
+  The badge is green within the estimate and orange over it. Hover over it to see the date and the
+  difference. The start is the last move to that status from an earlier status, such as To Do or
+  Refinement. So a story that was parked and picked up again starts over, but a story that goes back from
+  Code Review for rework keeps its start. This needs one extra Jira call per story that is at that status
+  or a later one.
 - Remaining work is the estimate times (1 minus the progress of the status).
-- A story without story points gets `default_hours`. Its remaining hours have a question mark, for
-  example `40h?`. The total of its epic has a question mark too.
+- With `implementation_status` set, a story that started in that status has already used part of its
+  estimate. Its bar starts on that start day, so the days already worked show in the past. From today
+  it gets what is left of the estimate after the hours its team member worked since the start, or what
+  its status says is left if that is less. A story that is over its estimate gets what its status says
+  is left. For example, a 5 point story that started 3 working days ago has 2 days left.
+- A story without story points gets `default_hours`. Hover over its bar to see that it has no estimate.
 - The duration of an epic depends only on its stories. The epic starts with its first story and ends
-  with its last story. Its remaining hours are the sum of the remaining hours of its stories. Story
+  with its last story. Story
   points set on the epic itself are ignored.
 - An epic without stories is shown as a striped bar from its Start date to its Due date in Jira, so
   you can plan a roadmap. The planner does not reserve team hours for it. An epic without stories
   and without these dates is skipped. The tool finds the Start date field by its name.
-- Stories that are not done start on today's date at the earliest.
+- Stories that are not done start on today's date at the earliest, except for the days already worked
+  on a story in the implementation status.
 - A done story is placed from its Jira status history. It starts on the first change to the
   `work_starts_at` status or a status with more progress. Without `work_starts_at`, it starts on the
   first change to a status with progress above 0. It ends on the last change to a status at 100. A
@@ -141,8 +154,8 @@ How the planning works:
 
 In the chart you can zoom, search for a story and show or hide done stories. Done stories are hidden
 at first. Click a team member badge above the table to show only the stories of that member. You can
-select more than one member, and "Unassigned". The epic rows then show the points and remaining hours
-of the stories that are shown. The Points and Sprint columns show the story points and the number of
+select more than one member, and "Unassigned". The epic rows then show the points of the stories
+that are shown. The Points and Sprint columns show the story points and the number of
 the last sprint of each story. Click a bar to open the story in Jira. The buttons in the Story column header collapse or
 expand all epics. Each title in the Story column starts with the icon of its Jira issue type. The
 run downloads these icons from Jira and puts them in the page, so the page shows them without a Jira
@@ -167,8 +180,7 @@ no changes.
 The checkbox "Show changes since …" in the toolbar turns these marks on and off:
 
 - A new story has a yellow row and a red NEW in the Moved column.
-- A story with a changed estimate shows the change next to its remaining hours, for example
-  `16h +8h`.
+- Hover over a story with a changed estimate to see the change, for example `Estimate: 16h → 24h`.
 - A thin gray bar under a story or epic shows its dates in the baseline.
 - The Moved column shows how many working days the end date moved.
 - A story that the baseline planned to be done by now, but that is still open, has a red outline.

@@ -7,6 +7,7 @@ velocity = 8.0                  # hours per story point
 include_open_sprints = false    # also add all stories in the active sprint
 include_future_sprints = false  # also add all stories in future sprints
 work_starts_at = "In Progress"  # a done story's bar starts at this status or a later one
+implementation_status = "Implementation"  # open stories show the days since they started in this status
 use_backlog_order = true        # plan stories in Jira backlog order, not in the order of this file
 dependency_links = ["Blocks"]   # Jira link types that make a story wait for another
 auto_assign = true              # false plans stories without a team member under "Unassigned"

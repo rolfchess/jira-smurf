@@ -192,6 +192,7 @@ class GanttConfig:
     use_backlog_order: bool  # schedule stories in Jira backlog order instead of the order of the configuration file
     dependency_links: list  # lowercase names of Jira link types that make a story wait for another
     auto_assign: bool  # give stories without a team member to the team; if False, plan them under "Unassigned"
+    implementation_status: str  # status where open stories show their days of work in a badge, "" if not set
 
 
 def parse_dates(setting, values, path):
@@ -305,6 +306,14 @@ def load_gantt_config(path="gantt.toml"):
             sys.exit(1)
         work_start_progress = statuses[work_starts_at.lower()]
 
+    # This is the optional status where open stories show their days of work in a badge
+    implementation_status = raw.get("implementation_status")
+    if implementation_status is not None:
+        if not isinstance(implementation_status, str) or implementation_status.lower() not in statuses:
+            print(f"Error: 'implementation_status' must be a status from [statuses], got {implementation_status!r}",
+                  file=sys.stderr)
+            sys.exit(1)
+
     # Parse optional [status_colors] section — maps status name to a row background color
     status_colors_raw = raw.get("status_colors", {})
     if not isinstance(status_colors_raw, dict):
@@ -362,7 +371,8 @@ def load_gantt_config(path="gantt.toml"):
                        work_start_progress=work_start_progress,
                        use_backlog_order=use_backlog_order,
                        dependency_links=[name.lower() for name in dependency_links],
-                       auto_assign=auto_assign_team)
+                       auto_assign=auto_assign_team,
+                       implementation_status=implementation_status or "")
 
 
 def fetch_stories_for_epic(epic_key):
@@ -546,6 +556,26 @@ def work_dates(status_changes, statuses, work_start_progress=0.0):
     return start, end
 
 
+def implementation_start(status_changes, status, statuses):
+    """Return the day the current stretch of work in the given status (any case) started, or None.
+
+    This is the last move to the status from an earlier status, one with less progress in
+    statuses. So a story that was parked, for example back in refinement, starts again when
+    it is picked up. A story that comes back from a later status such as Code Review for
+    rework keeps its date. Before the first change the story counts as in an earlier status.
+    """
+    status = status.lower()
+    progress = statuses.get(status, 0)
+    start = None
+    previous = None
+    for day, name in status_changes:
+        name = name.lower()
+        if name == status and (previous is None or statuses.get(previous, 0) < progress):
+            start = day
+        previous = name
+    return start
+
+
 def link_dependencies(issues, link_types):
     """Return {story key: {key of a story it waits for, ...}} from the Jira links between the given issues.
 
@@ -676,6 +706,16 @@ def hours_on(d, availability):
     if d in availability.get("days_off", ()):
         return 0
     return availability.get(DAY_KEYS[d.weekday()], 0)
+
+
+def hours_worked(start, end, availability):
+    """Return the hours this member works from start up to end (not included)."""
+    hours = 0
+    d = start
+    while d < end:
+        hours += hours_on(d, availability)
+        d += timedelta(days=1)
+    return hours
 
 
 def next_working_day(d, availability):
@@ -822,6 +862,16 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
         avail = team[member]
         cursor = member_states[member]
 
+        # A story that started in the implementation status has already used part of its estimate.
+        # It has what is left of the estimate after the hours worked since then, or what its status
+        # says is left if that is less. Over the estimate, only its status says what is left.
+        work_start = None
+        if progress < 1.0 and issue.get("_implementation_date"):
+            work_start = date.fromisoformat(issue["_implementation_date"])
+            worked = hours_worked(work_start, date.today(), avail)
+            if total_hours - worked > 0:
+                hours = min(hours, total_hours - worked)
+
         if progress >= 1.0 and story_key in done_dates:
             # A done story is shown on the days it was worked on, from its Jira status history
             start_date, end_date = done_dates[story_key]
@@ -859,6 +909,10 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
                     end_date = cursor
                     cursor += timedelta(days=1)
 
+            # The days already worked show in the past
+            if work_start and work_start < start_date:
+                start_date = work_start
+
         if progress < 1.0:
             # Only advance availability for stories that aren't done
             member_states[member] = cursor
@@ -875,6 +929,8 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
             "sprint": sprint,
             "due": issue["fields"].get("duedate") or "",
             "created": (issue["fields"].get("created") or "")[:10],
+            "implementation_date": issue.get("_implementation_date", ""),
+            "implementation_status": config.implementation_status,
             "issue_type":(issue["fields"].get("issuetype") or {}).get("name", ""),
             "issue_type_icon_url": (issue["fields"].get("issuetype") or {}).get("iconUrl", ""),
             "effort": 0 if progress >= 1.0 else hours,
@@ -1075,6 +1131,22 @@ def story_age_days(created):
         return None
     try:
         return max((date.today() - date.fromisoformat(created[:10])).days, 0)
+    except ValueError:
+        return None
+
+
+HOURS_PER_DAY = 8  # one working day, to turn an estimate in hours into days
+
+
+def implementation_work_days(moved, holidays):
+    """Return the working days from a date (YYYY-MM-DD) up to today, or None without a date.
+
+    Weekends and holidays don't count. A story that moved today has 0 days.
+    """
+    if not moved:
+        return None
+    try:
+        return max(working_days_between(date.fromisoformat(moved[:10]), date.today(), set(holidays)), 0)
     except ValueError:
         return None
 
@@ -1437,7 +1509,6 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             "points": format_points(s.get("points")),
             "points_value": s.get("points") or 0,
             "hours": effort,
-            "rank": s.get("rank"),
             "sprint": sprint_number(s.get("sprint", "")),
             "sprint_name": s.get("sprint", ""),
             "effort": effort_str,
@@ -1449,6 +1520,13 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             "created": s.get("created", ""),
             # Days since the story was created, only for open stories: a done story stops ageing
             "age_days": story_age_days(s.get("created", "")) if progress < 1.0 else None,
+            "implementation_date": s.get("implementation_date", ""),
+            "implementation_status": s.get("implementation_status", ""),
+            # Working days since the story started in the implementation status, only for open stories
+            "implementation_days": (implementation_work_days(s.get("implementation_date", ""), holidays)
+                                    if progress < 1.0 else None),
+            # The estimate in working days of 8 hours, to compare with the days in implementation
+            "estimate_days": round(s.get("total_hours", 0) / HOURS_PER_DAY, 1),
             "icon": issue_type_icon(s.get("issue_type", "")),
             "icon_url": s.get("issue_type_icon_url", ""),
             "unestimated": unestimated,
@@ -1578,6 +1656,14 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     background: #f2f2f2; color: #555; font-size: 9px; font-weight: 600; line-height: 12px;
     vertical-align: 1px; cursor: help;
   }}
+  /* Days since a story started in the implementation status */
+  .impl-badge {{
+    display: inline-block; margin-left: 3px; padding: 0 5px; border: 1px solid #b9dcc4; border-radius: 7px;
+    background: #ebf6ee; color: #2f6b42; font-size: 9px; font-weight: 600; line-height: 12px;
+    vertical-align: 1px; cursor: help;
+  }}
+  /* Longer in implementation than the estimate */
+  .impl-badge.impl-over {{ border-color: #f0c08a; background: #fdf1e3; color: #9a5a12; }}
   #show-done-wrap {{ display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }}
   #search-wrap {{ display: flex; align-items: center; gap: 6px; margin-left: auto; }}
   #search-input {{
@@ -1698,12 +1784,6 @@ function signed(value, unit) {{
   var number = Math.round(Math.abs(value) * 10) / 10;
   return (value > 0 ? "+" : "\u2212") + number + unit;
 }}
-// Remaining hours, followed by the change of the estimate since the baseline.
-function effortText(task) {{
-  if (!showChanges || !task.hours_delta) return task.effort;
-  var cls = task.hours_delta > 0 ? "delta-up" : "delta-down";
-  return task.effort + " <span class='" + cls + "'>" + signed(task.hours_delta, "h") + "</span>";
-}}
 // "NEW" for a story that is not in the baseline, or the working days its end date moved.
 function movedText(task) {{
   if (!showChanges) return "";
@@ -1730,19 +1810,13 @@ gantt.config.columns = [
         task.icon ? "<span class='type-icon'>" + task.icon + "</span>" : "";
       return icon + "<span title='" + task.text.replace(/'/g, "&#39;") + "'>" + task.text + "</span>";
     }} }},
-  {{name: "rank", label: "Rank", align: "center", width: 60, resize: true,
-    template: function(task) {{
-      return task.rank ? "<span title='Position of this story in the Jira backlog, among the stories of the plan'>" +
-        task.rank + "</span>" : "";
-    }} }},
   {{name: "status", label: "Status", align: "left", width: 120, resize: true}},
   {{name: "points", label: "Points", align: "center", width: 70, resize: true,
     template: function(task) {{ return task.points || ""; }} }},
   {{name: "sprint", label: "Sprint", align: "center", width: 70, resize: true,
     template: function(task) {{
       return task.sprint ? "<span title='" + task.sprint_name.replace(/'/g, "&#39;") + "'>" + task.sprint + "</span>" : "";
-    }} }},
-  {{name: "effort", label: "Remaining", align: "center", width: 100, resize: true, template: effortText}}{moved_column}
+    }} }}{moved_column}
 ];
 gantt.templates.tooltip_text = function(start, end, task) {{
   if (!task.text) return "";
@@ -2074,6 +2148,19 @@ gantt.templates.rightside_text = function(start, end, task) {{
     parts[parts.length - 1] = (parts[parts.length - 1] || "") +
       " <span class='age-badge' title='Created " + created + ", " + days + " ago'>" + task.age_days + "d</span>";
   }}
+  if (task.implementation_days !== null && task.implementation_days !== undefined) {{
+    var moved = gantt.date.date_to_str("%d %M %Y")(gantt.date.str_to_date("%Y-%m-%d")(task.implementation_date));
+    var plural = function(n) {{ return n === 1 ? "1 working day" : n + " working days"; }};
+    var diff = Math.round((task.implementation_days - task.estimate_days) * 10) / 10;
+    var verdict = diff > 0 ? plural(diff) + " over the estimate"
+                : diff < 0 ? plural(-diff) + " left in the estimate" : "exactly the estimate";
+    var title = "Started in " + task.implementation_status + " on " + moved + ": " +
+      plural(task.implementation_days) + " ago. Estimate: " + plural(task.estimate_days) +
+      (task.points ? " (" + task.points + " SP)" : "") + ", so " + verdict + ".";
+    parts[parts.length - 1] = (parts[parts.length - 1] || "") +
+      " <span class='impl-badge" + (diff > 0 ? " impl-over" : "") + "' title='" + title + "'>impl " +
+      task.implementation_days + "/" + task.estimate_days + "d</span>";
+  }}
   parts.push(gantt.date.date_to_str("%d %M")(end));
   return "<span style='font-size:11px;color:#666;'>" + parts.join(" \u2022 ") + "</span>";
 }};
@@ -2321,20 +2408,31 @@ def run_gantt(config_path, history_dir=None, since=None):
             print(f"  {missing} done {'story has' if missing == 1 else 'stories have'} no change to a done status "
                   f"in the history, so the plan start is used", file=sys.stderr)
 
+    # Find the day open stories started in the implementation status, from their status history.
+    # Only stories that are at least that far along can have been there, so only those are fetched.
+    if config.implementation_status:
+        impl_progress = config.statuses[config.implementation_status.lower()]
+        open_keys = [key for key in ordered_keys
+                     if impl_progress <= config.statuses.get(
+                         story_data[key]["fields"].get("status", {}).get("name", "").lower(), 0) < 1.0]
+        if open_keys:
+            print(f"Fetching the status history of {len(open_keys)} open stories...", file=sys.stderr)
+            for key in open_keys:
+                day = implementation_start(fetch_status_changes(key), config.implementation_status,
+                                           config.statuses)
+                if day:
+                    story_data[key]["_implementation_date"] = day.isoformat()
+
     # The planner takes stories in this order; the story rows keep the order of the configuration file
-    # The backlog order also gives the Rank column of the chart
     schedule_keys = ordered_keys
-    print("Fetching the backlog order...", file=sys.stderr)
-    positions = fetch_backlog_order(ordered_keys) if ordered_keys else {}
-    if config.use_backlog_order:
+    if config.use_backlog_order and ordered_keys:
+        print("Fetching the backlog order...", file=sys.stderr)
+        positions = fetch_backlog_order(ordered_keys)
         schedule_keys = sorted(ordered_keys, key=lambda key: positions.get(key, len(positions)))
 
     scheduled = schedule_stories(config, story_data, schedule_keys, done_dates)
     config_position = {key: i for i, key in enumerate(ordered_keys)}
     scheduled.sort(key=lambda s: config_position[s["key"]])
-    for s in scheduled:
-        # 1 is the highest story of the plan in the Jira backlog
-        s["rank"] = positions[s["key"]] + 1 if s["key"] in positions else None
     print(f"Scheduled {len(scheduled)} stories.", file=sys.stderr)
     changes = None
     snapshots = []
