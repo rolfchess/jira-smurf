@@ -371,7 +371,7 @@ def fetch_stories_for_epic(epic_key):
     Tries next-gen (parent) first, falls back to classic (Epic Link).
     Returns list of issue dicts.
     """
-    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10016,duedate,issuetype,issuelinks"
+    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10016,duedate,created,issuetype,issuelinks"
 
     for jql in (
         f"parent = {epic_key} AND issuetype = Story ORDER BY key ASC",
@@ -410,7 +410,7 @@ def fetch_stories_by_keys(story_keys, warn_missing=True):
     """
     keys_str = ", ".join(story_keys)
     jql = f"key in ({keys_str})"
-    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10016,duedate,issuetype,issuelinks"
+    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10016,duedate,created,issuetype,issuelinks"
     issues = []
     next_page_token = None
 
@@ -485,7 +485,7 @@ def fetch_sprint_stories(include_open, include_future):
         sprint_functions.append("futureSprints()")
     sprint_clause = " OR ".join(f"sprint in {f}" for f in sprint_functions)
     jql = f"project = {JIRA_PROJECT} AND issuetype = Story AND ({sprint_clause}) ORDER BY key ASC"
-    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10016,duedate,issuetype,issuelinks"
+    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10016,duedate,created,issuetype,issuelinks"
     issues = []
     next_page_token = None
 
@@ -874,7 +874,8 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
             "status": status,
             "sprint": sprint,
             "due": issue["fields"].get("duedate") or "",
-            "issue_type": (issue["fields"].get("issuetype") or {}).get("name", ""),
+            "created": (issue["fields"].get("created") or "")[:10],
+            "issue_type":(issue["fields"].get("issuetype") or {}).get("name", ""),
             "issue_type_icon_url": (issue["fields"].get("issuetype") or {}).get("iconUrl", ""),
             "effort": 0 if progress >= 1.0 else hours,
             "total_hours": total_hours,
@@ -1066,6 +1067,16 @@ def format_hours(hours):
 def format_points(points):
     """Return story points as "5" or "0.5", or "" for a story without points."""
     return "" if points is None else f"{points:g}"
+
+
+def story_age_days(created):
+    """Return the number of days from a created date (YYYY-MM-DD) up to today, or None without a date."""
+    if not created:
+        return None
+    try:
+        return max((date.today() - date.fromisoformat(created[:10])).days, 0)
+    except ValueError:
+        return None
 
 
 def sprint_number(sprint):
@@ -1435,6 +1446,9 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             "parent": epic_task_ids[s["epic"]],
             "story_key": s["key"],
             "due_date": s.get("due", ""),
+            "created": s.get("created", ""),
+            # Days since the story was created, only for open stories: a done story stops ageing
+            "age_days": story_age_days(s.get("created", "")) if progress < 1.0 else None,
             "icon": issue_type_icon(s.get("issue_type", "")),
             "icon_url": s.get("issue_type_icon_url", ""),
             "unestimated": unestimated,
@@ -1557,6 +1571,12 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     display: inline-block; margin-left: 3px; padding: 0 5px; border: 1px solid #c9d7e8; border-radius: 7px;
     background: #eaf0f7; color: #3d6491; font-size: 9px; font-weight: 600; line-height: 12px;
     letter-spacing: 0.3px; text-transform: uppercase; vertical-align: 1px; cursor: help;
+  }}
+  /* Days since a story was created; neutral grey so it reads as information, not as a warning */
+  .age-badge {{
+    display: inline-block; margin-left: 3px; padding: 0 5px; border: 1px solid #d6d6d6; border-radius: 7px;
+    background: #f2f2f2; color: #555; font-size: 9px; font-weight: 600; line-height: 12px;
+    vertical-align: 1px; cursor: help;
   }}
   #show-done-wrap {{ display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }}
   #search-wrap {{ display: flex; align-items: center; gap: 6px; margin-left: auto; }}
@@ -2047,6 +2067,12 @@ gantt.templates.rightside_text = function(start, end, task) {{
       name += " <span class='auto-badge' title='Not assigned in Jira: the planner picked the team member who is free first'>auto</span>";
     }}
     parts.push(name);
+  }}
+  if (task.age_days !== null && task.age_days !== undefined) {{
+    var created = gantt.date.date_to_str("%d %M %Y")(gantt.date.str_to_date("%Y-%m-%d")(task.created));
+    var days = task.age_days === 1 ? "1 day" : task.age_days + " days";
+    parts[parts.length - 1] = (parts[parts.length - 1] || "") +
+      " <span class='age-badge' title='Created " + created + ", " + days + " ago'>" + task.age_days + "d</span>";
   }}
   parts.push(gantt.date.date_to_str("%d %M")(end));
   return "<span style='font-size:11px;color:#666;'>" + parts.join(" \u2022 ") + "</span>";

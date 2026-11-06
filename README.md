@@ -122,6 +122,8 @@ How the planning works:
 - A story assigned in Jira to a team member goes to that member. Other stories go to the auto-assign
   member who is free first. Such a story has an `AUTO` badge after the name in the chart. With
   `auto_assign = false`, they go to "Unassigned" instead.
+- An open story has a grey badge after the name with its age: the number of days since it was
+  created in Jira, for example `45d`. Hover over it to see the date. Done stories have no age badge.
 - Remaining work is the estimate times (1 minus the progress of the status).
 - A story without story points gets `default_hours`. Its remaining hours have a question mark, for
   example `40h?`. The total of its epic has a question mark too.
