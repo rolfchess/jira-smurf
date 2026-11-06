@@ -1428,6 +1428,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
                 "story_key": row["key"],
                 "progress": 0,
                 "roadmap": True,
+                "is_epic": True,
                 "due_date": row["due"],
             })
             continue
@@ -1468,6 +1469,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             "status": "",
             "color": epic_color_map[epic_name],
             "type": "project",
+            "is_epic": True,
             "open": True,
             "icon": ISSUE_TYPE_ICONS["epic"],
             "unestimated": epic_unestimated,
@@ -1664,6 +1666,19 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   }}
   /* Longer in implementation than the estimate */
   .impl-badge.impl-over {{ border-color: #f0c08a; background: #fdf1e3; color: #9a5a12; }}
+  /* Story points in the Points column; the green of the impl badge */
+  .points-badge {{
+    display: inline-block; min-width: 14px; padding: 0 6px; border: 1px solid #b9dcc4; border-radius: 8px;
+    background: #ebf6ee; color: #2f6b42; font-size: 11px; font-weight: 600; line-height: 16px;
+    text-align: center; vertical-align: middle;
+  }}
+  .points-badge.points-over {{ border-color: #f0c08a; background: #fdf1e3; color: #9a5a12; }}
+  .gantt_row.task-done-row .points-badge {{ opacity: 0.6; }}
+  /* Epic rows stand out from their stories */
+  .gantt_row.epic-row, .gantt_task_row.epic-row {{ background: #eef2f7; }}
+  .gantt_row.epic-row {{ font-weight: 600; }}
+  /* A darker shade of the blue-grey epic row background */
+  .gantt_row.epic-row .points-badge {{ border-color: #52677f; background: #52677f; color: #fff; }}
   #show-done-wrap {{ display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }}
   #search-wrap {{ display: flex; align-items: center; gap: 6px; margin-left: auto; }}
   #search-input {{
@@ -1812,7 +1827,12 @@ gantt.config.columns = [
     }} }},
   {{name: "status", label: "Status", align: "left", width: 120, resize: true}},
   {{name: "points", label: "Points", align: "center", width: 70, resize: true,
-    template: function(task) {{ return task.points || ""; }} }},
+    template: function(task) {{
+      if (!task.points) return "";
+      // Orange like the impl badge when the story is longer in implementation than its estimate
+      var over = task.implementation_days != null && task.implementation_days > task.estimate_days;
+      return "<span class='points-badge" + (over ? " points-over" : "") + "'>" + task.points + "</span>";
+    }} }},
   {{name: "sprint", label: "Sprint", align: "center", width: 70, resize: true,
     template: function(task) {{
       return task.sprint ? "<span title='" + task.sprint_name.replace(/'/g, "&#39;") + "'>" + task.sprint + "</span>" : "";
@@ -2087,11 +2107,16 @@ var statusClasses = {status_classes_json};  // {{lowercase status: CSS class}} f
 function statusRowClass(task) {{
   return statusClasses[(task.status || "").toLowerCase()] || "";
 }}
+function epicRowClass(task) {{
+  // Not task.type: the filters turn an epic into a plain task while some of its stories are hidden
+  return task.is_epic ? "epic-row" : "";
+}}
 gantt.templates.task_row_class = function(start, end, task) {{
-  return joinClasses(statusRowClass(task), changeRowClass(task));
+  return joinClasses(epicRowClass(task), statusRowClass(task), changeRowClass(task));
 }};
 gantt.templates.grid_row_class = function(start, end, task) {{
-  var base = joinClasses(task.progress >= 1 ? "task-done-row" : "", statusRowClass(task), changeRowClass(task));
+  var base = joinClasses(epicRowClass(task), task.progress >= 1 ? "task-done-row" : "",
+    statusRowClass(task), changeRowClass(task));
   if (!searchTerm) return base;
   if (searchMatchIds[task.id]) return (base + " search-match-row").trim();
   if (searchVisibleIds[task.id]) return base;
