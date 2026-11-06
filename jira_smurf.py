@@ -1428,6 +1428,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
                 "story_key": row["key"],
                 "progress": 0,
                 "roadmap": True,
+                "is_epic": True,
                 "due_date": row["due"],
             })
             continue
@@ -1468,6 +1469,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             "status": "",
             "color": epic_color_map[epic_name],
             "type": "project",
+            "is_epic": True,
             "open": True,
             "icon": ISSUE_TYPE_ICONS["epic"],
             "unestimated": epic_unestimated,
@@ -1644,6 +1646,18 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   #toolbar button.active {{ background: #4e79a7; color: #fff; border-color: #4e79a7; }}
   #toolbar button:disabled {{ cursor: wait; color: #888; background: #f4f4f4; }}
   #refresh-status {{ font-size: 12px; color: #c33; }}
+  /* Covers the page while a refresh from Jira runs; the page reloads when it is done */
+  #refresh-overlay {{
+    position: fixed; inset: 0; z-index: 10000; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 14px;
+    background: rgba(255, 255, 255, 0.7); color: #333; font-size: 14px; cursor: wait;
+  }}
+  #refresh-overlay[hidden] {{ display: none; }}
+  #refresh-overlay .spinner {{
+    width: 44px; height: 44px; border: 4px solid #d5dfeb; border-top-color: #4e79a7;
+    border-radius: 50%; animation: refresh-spin 0.8s linear infinite;
+  }}
+  @keyframes refresh-spin {{ to {{ transform: rotate(360deg); }} }}
   /* Marks a member the planner picked; the soft blue of the toolbar, quiet next to the grey label */
   .auto-badge {{
     display: inline-block; margin-left: 3px; padding: 0 5px; border: 1px solid #c9d7e8; border-radius: 7px;
@@ -1664,6 +1678,19 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   }}
   /* Longer in implementation than the estimate */
   .impl-badge.impl-over {{ border-color: #f0c08a; background: #fdf1e3; color: #9a5a12; }}
+  /* Story points in the Points column; the green of the impl badge */
+  .points-badge {{
+    display: inline-block; min-width: 14px; padding: 0 6px; border: 1px solid #b9dcc4; border-radius: 8px;
+    background: #ebf6ee; color: #2f6b42; font-size: 11px; font-weight: 600; line-height: 16px;
+    text-align: center; vertical-align: middle;
+  }}
+  .points-badge.points-over {{ border-color: #f0c08a; background: #fdf1e3; color: #9a5a12; }}
+  .gantt_row.task-done-row .points-badge {{ opacity: 0.6; }}
+  /* Epic rows stand out from their stories */
+  .gantt_row.epic-row, .gantt_task_row.epic-row {{ background: #eef2f7; }}
+  .gantt_row.epic-row {{ font-weight: 600; }}
+  /* A darker shade of the blue-grey epic row background */
+  .gantt_row.epic-row .points-badge {{ border-color: #52677f; background: #52677f; color: #fff; }}
   #show-done-wrap {{ display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }}
   #search-wrap {{ display: flex; align-items: center; gap: 6px; margin-left: auto; }}
   #search-input {{
@@ -1749,6 +1776,10 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   </div>
 </div>
 <div id="member-filter"></div>
+<div id="refresh-overlay" hidden role="status" aria-live="polite">
+  <div class="spinner"></div>
+  <div>Fetching the stories from Jira…</div>
+</div>
 <script>
 // The refresh button works only when the page comes from "jira_smurf.py serve", not from a file
 if (location.protocol.startsWith("http")) {{
@@ -1757,15 +1788,18 @@ if (location.protocol.startsWith("http")) {{
 function refreshChart() {{
   const button = document.getElementById("refresh-button");
   const status = document.getElementById("refresh-status");
+  const overlay = document.getElementById("refresh-overlay");
   button.disabled = true;
   button.textContent = "Refreshing…";
   status.textContent = "";
+  overlay.hidden = false;
   fetch("refresh", {{method: "POST", headers: {{"X-Jira-Smurf": "refresh"}}}})
     .then(response => response.text().then(text => {{
       if (!response.ok) throw new Error(text || response.statusText);
       location.reload();
     }}))
     .catch(error => {{
+      overlay.hidden = true;
       button.disabled = false;
       button.textContent = "Refresh from Jira";
       status.textContent = "Refresh failed: " + error.message;
@@ -1812,7 +1846,12 @@ gantt.config.columns = [
     }} }},
   {{name: "status", label: "Status", align: "left", width: 120, resize: true}},
   {{name: "points", label: "Points", align: "center", width: 70, resize: true,
-    template: function(task) {{ return task.points || ""; }} }},
+    template: function(task) {{
+      if (!task.points) return "";
+      // Orange like the impl badge when the story is longer in implementation than its estimate
+      var over = task.implementation_days != null && task.implementation_days > task.estimate_days;
+      return "<span class='points-badge" + (over ? " points-over" : "") + "'>" + task.points + "</span>";
+    }} }},
   {{name: "sprint", label: "Sprint", align: "center", width: 70, resize: true,
     template: function(task) {{
       return task.sprint ? "<span title='" + task.sprint_name.replace(/'/g, "&#39;") + "'>" + task.sprint + "</span>" : "";
@@ -2087,11 +2126,16 @@ var statusClasses = {status_classes_json};  // {{lowercase status: CSS class}} f
 function statusRowClass(task) {{
   return statusClasses[(task.status || "").toLowerCase()] || "";
 }}
+function epicRowClass(task) {{
+  // Not task.type: the filters turn an epic into a plain task while some of its stories are hidden
+  return task.is_epic ? "epic-row" : "";
+}}
 gantt.templates.task_row_class = function(start, end, task) {{
-  return joinClasses(statusRowClass(task), changeRowClass(task));
+  return joinClasses(epicRowClass(task), statusRowClass(task), changeRowClass(task));
 }};
 gantt.templates.grid_row_class = function(start, end, task) {{
-  var base = joinClasses(task.progress >= 1 ? "task-done-row" : "", statusRowClass(task), changeRowClass(task));
+  var base = joinClasses(epicRowClass(task), task.progress >= 1 ? "task-done-row" : "",
+    statusRowClass(task), changeRowClass(task));
   if (!searchTerm) return base;
   if (searchMatchIds[task.id]) return (base + " search-match-row").trim();
   if (searchVisibleIds[task.id]) return base;
