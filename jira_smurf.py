@@ -1646,6 +1646,18 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   #toolbar button.active {{ background: #4e79a7; color: #fff; border-color: #4e79a7; }}
   #toolbar button:disabled {{ cursor: wait; color: #888; background: #f4f4f4; }}
   #refresh-status {{ font-size: 12px; color: #c33; }}
+  /* Covers the page while a refresh from Jira runs; the page reloads when it is done */
+  #refresh-overlay {{
+    position: fixed; inset: 0; z-index: 10000; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 14px;
+    background: rgba(255, 255, 255, 0.7); color: #333; font-size: 14px; cursor: wait;
+  }}
+  #refresh-overlay[hidden] {{ display: none; }}
+  #refresh-overlay .spinner {{
+    width: 44px; height: 44px; border: 4px solid #d5dfeb; border-top-color: #4e79a7;
+    border-radius: 50%; animation: refresh-spin 0.8s linear infinite;
+  }}
+  @keyframes refresh-spin {{ to {{ transform: rotate(360deg); }} }}
   /* Marks a member the planner picked; the soft blue of the toolbar, quiet next to the grey label */
   .auto-badge {{
     display: inline-block; margin-left: 3px; padding: 0 5px; border: 1px solid #c9d7e8; border-radius: 7px;
@@ -1764,6 +1776,10 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   </div>
 </div>
 <div id="member-filter"></div>
+<div id="refresh-overlay" hidden role="status" aria-live="polite">
+  <div class="spinner"></div>
+  <div>Fetching the stories from Jira…</div>
+</div>
 <script>
 // The refresh button works only when the page comes from "jira_smurf.py serve", not from a file
 if (location.protocol.startsWith("http")) {{
@@ -1772,15 +1788,18 @@ if (location.protocol.startsWith("http")) {{
 function refreshChart() {{
   const button = document.getElementById("refresh-button");
   const status = document.getElementById("refresh-status");
+  const overlay = document.getElementById("refresh-overlay");
   button.disabled = true;
   button.textContent = "Refreshing…";
   status.textContent = "";
+  overlay.hidden = false;
   fetch("refresh", {{method: "POST", headers: {{"X-Jira-Smurf": "refresh"}}}})
     .then(response => response.text().then(text => {{
       if (!response.ok) throw new Error(text || response.statusText);
       location.reload();
     }}))
     .catch(error => {{
+      overlay.hidden = true;
       button.disabled = false;
       button.textContent = "Refresh from Jira";
       status.textContent = "Refresh failed: " + error.message;
