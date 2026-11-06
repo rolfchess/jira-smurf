@@ -113,8 +113,7 @@ How the planning works:
 - Stories are planned in the order of the file: epics first, then single stories, then sprint
   stories. With `use_backlog_order = true`, they are planned in the order of the Jira backlog, and
   the epic rows of the chart follow the rank of the epics in Jira, with stories without an epic
-  last. Otherwise the epic rows follow the order of the file. The Rank column shows the position
-  of each story in the Jira backlog, among the stories of the plan (1 is the highest).
+  last. Otherwise the epic rows follow the order of the file.
 - Before that order, the planner groups the stories by their status in `[statuses]`: first done
   stories (100), then started stories (at least the value of `work_starts_at`, or above 0 without
   it), then stories in the active sprint, then all other stories. So work that is already started

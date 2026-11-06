@@ -1509,7 +1509,6 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             "points": format_points(s.get("points")),
             "points_value": s.get("points") or 0,
             "hours": effort,
-            "rank": s.get("rank"),
             "sprint": sprint_number(s.get("sprint", "")),
             "sprint_name": s.get("sprint", ""),
             "effort": effort_str,
@@ -1810,11 +1809,6 @@ gantt.config.columns = [
       var icon = image ? "<img class='type-icon' src='" + image + "' alt=''>" :
         task.icon ? "<span class='type-icon'>" + task.icon + "</span>" : "";
       return icon + "<span title='" + task.text.replace(/'/g, "&#39;") + "'>" + task.text + "</span>";
-    }} }},
-  {{name: "rank", label: "Rank", align: "center", width: 60, resize: true,
-    template: function(task) {{
-      return task.rank ? "<span title='Position of this story in the Jira backlog, among the stories of the plan'>" +
-        task.rank + "</span>" : "";
     }} }},
   {{name: "status", label: "Status", align: "left", width: 120, resize: true}},
   {{name: "points", label: "Points", align: "center", width: 70, resize: true,
@@ -2430,19 +2424,15 @@ def run_gantt(config_path, history_dir=None, since=None):
                     story_data[key]["_implementation_date"] = day.isoformat()
 
     # The planner takes stories in this order; the story rows keep the order of the configuration file
-    # The backlog order also gives the Rank column of the chart
     schedule_keys = ordered_keys
-    print("Fetching the backlog order...", file=sys.stderr)
-    positions = fetch_backlog_order(ordered_keys) if ordered_keys else {}
-    if config.use_backlog_order:
+    if config.use_backlog_order and ordered_keys:
+        print("Fetching the backlog order...", file=sys.stderr)
+        positions = fetch_backlog_order(ordered_keys)
         schedule_keys = sorted(ordered_keys, key=lambda key: positions.get(key, len(positions)))
 
     scheduled = schedule_stories(config, story_data, schedule_keys, done_dates)
     config_position = {key: i for i, key in enumerate(ordered_keys)}
     scheduled.sort(key=lambda s: config_position[s["key"]])
-    for s in scheduled:
-        # 1 is the highest story of the plan in the Jira backlog
-        s["rank"] = positions[s["key"]] + 1 if s["key"] in positions else None
     print(f"Scheduled {len(scheduled)} stories.", file=sys.stderr)
     changes = None
     snapshots = []
