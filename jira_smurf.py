@@ -1627,6 +1627,10 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
 <link rel="stylesheet" href="https://cdn.dhtmlx.com/gantt/9.0/dhtmlxgantt.css">
 <style>
   body {{ font-family: sans-serif; margin: 20px; }}
+  /* Keep bar colours and row backgrounds when printing / saving as PDF */
+  @media print {{
+    * {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
+  }}
   #gantt_here {{ width: 100%; height: calc(100vh - 150px); }}
   .gantt_task_line.task-done {{ opacity: 0.45; filter: grayscale(60%); }}
   .gantt_task_line.task-done .gantt_task_content {{ text-decoration: line-through; }}
