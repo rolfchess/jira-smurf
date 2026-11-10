@@ -103,6 +103,10 @@ def fetch_stories():
     return issues
 
 
+# Name of the group of stories that do not belong to an epic
+NO_EPIC = "(No Epic)"
+
+
 def resolve_epic_name(issue):
     """Return the name of the epic that a story belongs to, or "(No Epic)"."""
     fields = issue["fields"]
@@ -125,7 +129,7 @@ def resolve_epic_name(issue):
         except requests.HTTPError:
             return epic_key  # fall back to key if we can't fetch it
 
-    return "(No Epic)"
+    return NO_EPIC
 
 
 def get_story_points(fields):
@@ -940,7 +944,7 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
         scheduled.append({
             "key": story_key,
             "title": title,
-            "epic": issue.get("_epic", "(No Epic)"),
+            "epic": issue.get("_epic", NO_EPIC),
             "epic_key": issue.get("_epic_key", ""),
             "assignee": member,
             "auto_assigned": auto_assigned,  # the planner picked the member, not Jira
@@ -1425,6 +1429,10 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
         elif key in roadmap_by_key:
             epic_rows.append(("roadmap", roadmap_by_key[key]))
     epic_rows += [("stories", name) for name in epics_seen if ("stories", name) not in epic_rows]
+    # The stories without an epic come first
+    if ("stories", NO_EPIC) in epic_rows:
+        epic_rows.remove(("stories", NO_EPIC))
+        epic_rows.insert(0, ("stories", NO_EPIC))
     row_names = [row if kind == "stories" else row["name"] for kind, row in epic_rows]
     epic_color_map = {name: EPIC_COLORS[i % len(EPIC_COLORS)] for i, name in enumerate(row_names)}
 
@@ -1489,6 +1497,8 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             "color": epic_color_map[epic_name],
             "type": "project",
             "is_epic": True,
+            # The stories without an epic are a group, not one piece of work, so the row gets no bar
+            "no_bar": epic_name == NO_EPIC,
             "open": True,
             "icon": ISSUE_TYPE_ICONS["epic"],
             "unestimated": epic_unestimated,
@@ -1742,6 +1752,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   .gantt_task_line.change-removed {{ opacity: 0.5; }}
   .gantt_task_line.roadmap-epic {{ opacity: 0.75;
     background-image: repeating-linear-gradient(45deg, rgba(255,255,255,0.45) 0 6px, transparent 6px 12px); }}
+  .gantt_task_line.no-bar {{ display: none; }}
   .gantt_task_line.change-late {{ box-shadow: 0 0 0 2px #d62728; }}
   .delta-up {{ color: #c62828; font-weight: 600; }}
   .delta-down {{ color: #2e7d32; font-weight: 600; }}
@@ -2139,7 +2150,7 @@ function joinClasses() {{
 }}
 gantt.templates.task_class = function(start, end, task) {{
   var base = (task.progress >= 1 ? "clickable-task task-done" : "clickable-task") + changeBarClass(task) +
-    (task.roadmap ? " roadmap-epic" : "");
+    (task.roadmap ? " roadmap-epic" : "") + (task.no_bar ? " no-bar" : "");
   if (!searchTerm) return base;
   if (searchMatchIds[task.id]) return base + " search-match";
   if (searchVisibleIds[task.id]) return base;
