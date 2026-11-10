@@ -65,6 +65,7 @@ auto_assign = false
 "Refinement" = 1
 "Ready for Development" = 5
 "In Progress" = 20
+"Implementation" = 40
 "Blocked" = 0
 "Code Review" = 80
 "Done" = 100
