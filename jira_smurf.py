@@ -579,24 +579,29 @@ def work_dates(status_changes, statuses, work_start_progress=0.0):
     return start, end
 
 
-def implementation_start(status_changes, status, statuses):
-    """Return the day the current stretch of work in the given status (any case) started, or None.
+def implementation_stretches(status_changes, status, statuses):
+    """Return the stretches a story spent in the given status (any case) or a later one.
 
-    This is the last move to the status from an earlier status, one with less progress in
-    statuses. So a story that was parked, for example back in refinement, starts again when
-    it is picked up. A story that comes back from a later status such as Code Review for
-    rework keeps its date. Before the first change the story counts as in an earlier status.
+    The result is a list of (first day, day it moved back) pairs, oldest first. The day it
+    moved back is None for a stretch that is still going on. A later status is one with more
+    progress in statuses that is not done. So a story that goes back from Code Review for
+    rework stays in its stretch, but the days a story was parked, for example back in Ready
+    for Development, are left out. Before the first change the story counts as in an earlier status.
     """
-    status = status.lower()
-    progress = statuses.get(status, 0)
+    progress = statuses.get(status.lower(), 0)
+    stretches = []
     start = None
-    previous = None
     for day, name in status_changes:
-        name = name.lower()
-        if name == status and (previous is None or statuses.get(previous, 0) < progress):
+        in_work = progress <= statuses.get(name.lower(), 0) < 1.0
+        if in_work and start is None:
             start = day
-        previous = name
-    return start
+        elif not in_work and start is not None:
+            if day > start:  # a move back on the same day leaves no stretch
+                stretches.append((start, day))
+            start = None
+    if start is not None:
+        stretches.append((start, None))
+    return stretches
 
 
 def link_dependencies(issues, link_types):
@@ -893,12 +898,15 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
         cursor = member_states[member]
 
         # A story that started in the implementation status has already used part of its estimate.
-        # It has what is left of the estimate after the hours worked since then, or what its status
-        # says is left if that is less. Over the estimate, only its status says what is left.
+        # It has what is left of the estimate after the hours worked in that status or a later one,
+        # or what its status says is left if that is less. Over the estimate, only its status says
+        # what is left. The days it was parked in an earlier status don't count as worked.
         work_start = None
         if progress < 1.0 and issue.get("_implementation_date"):
             work_start = date.fromisoformat(issue["_implementation_date"])
-            worked = hours_worked(work_start, date.today(), avail)
+            worked = sum(hours_worked(date.fromisoformat(start), date.fromisoformat(end) if end else date.today(),
+                                      avail)
+                         for start, end in issue.get("_implementation_stretches", []))
             if total_hours - worked > 0:
                 hours = min(hours, total_hours - worked)
 
@@ -960,6 +968,7 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
             "due": issue["fields"].get("duedate") or "",
             "created": (issue["fields"].get("created") or "")[:10],
             "implementation_date": issue.get("_implementation_date", ""),
+            "implementation_stretches": issue.get("_implementation_stretches", []),
             "implementation_status": config.implementation_status,
             "issue_type":(issue["fields"].get("issuetype") or {}).get("name", ""),
             "issue_type_icon_url": (issue["fields"].get("issuetype") or {}).get("iconUrl", ""),
@@ -1168,15 +1177,20 @@ def story_age_days(created):
 HOURS_PER_DAY = 8  # one working day, to turn an estimate in hours into days
 
 
-def implementation_work_days(moved, holidays):
-    """Return the working days from a date (YYYY-MM-DD) up to today, or None without a date.
+def implementation_work_days(stretches, holidays):
+    """Return the working days in the given stretches, or None without stretches.
 
-    Weekends and holidays don't count. A story that moved today has 0 days.
+    Each stretch is [first day, day it moved back] as YYYY-MM-DD, with "" for a stretch that is
+    still going on, which counts up to today. Weekends and holidays don't count. A stretch that
+    started today, or that ended on the day it started, has 0 days.
     """
-    if not moved:
+    if not stretches:
         return None
     try:
-        return max(working_days_between(date.fromisoformat(moved[:10]), date.today(), set(holidays)), 0)
+        return sum(max(working_days_between(date.fromisoformat(start[:10]),
+                                            date.fromisoformat(end[:10]) if end else date.today(),
+                                            set(holidays)), 0)
+                   for start, end in stretches)
     except ValueError:
         return None
 
@@ -1560,9 +1574,11 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             "age_days": story_age_days(s.get("created", "")) if progress < 1.0 else None,
             "implementation_date": s.get("implementation_date", ""),
             "implementation_status": s.get("implementation_status", ""),
-            # Working days since the story started in the implementation status, only for open stories
-            "implementation_days": (implementation_work_days(s.get("implementation_date", ""), holidays)
+            # Working days in the implementation status or a later one, only for open stories
+            "implementation_days": (implementation_work_days(s.get("implementation_stretches", []), holidays)
                                     if progress < 1.0 else None),
+            # True when the story went back to an earlier status in between, so those days don't count
+            "implementation_parked": len(s.get("implementation_stretches", [])) > 1,
             # The estimate in working days of 8 hours, to compare with the days in implementation
             "estimate_days": round(s.get("total_hours", 0) / HOURS_PER_DAY, 1),
             "icon": issue_type_icon(s.get("issue_type", "")),
@@ -2239,8 +2255,10 @@ gantt.templates.rightside_text = function(start, end, task) {{
     var diff = Math.round((task.implementation_days - task.estimate_days) * 10) / 10;
     var verdict = diff > 0 ? plural(diff) + " over the estimate"
                 : diff < 0 ? plural(-diff) + " left in the estimate" : "exactly the estimate";
-    var title = "Started in " + task.implementation_status + " on " + moved + ": " +
-      plural(task.implementation_days) + " ago. Estimate: " + plural(task.estimate_days) +
+    var title = "Started in " + task.implementation_status + " on " + moved + ". " +
+      plural(task.implementation_days) + " in " + task.implementation_status + " or a later status" +
+      (task.implementation_parked ? ", not counting the days back in an earlier status" : "") +
+      ". Estimate: " + plural(task.estimate_days) +
       (task.points ? " (" + task.points + " SP)" : "") + ", so " + verdict + ".";
     parts[parts.length - 1] = (parts[parts.length - 1] || "") +
       " <span class='impl-badge" + (diff > 0 ? " impl-over" : "") + "' title='" + title + "'>impl " +
@@ -2508,8 +2526,9 @@ def run_gantt(config_path, history_dir=None, since=None):
             print(f"  {missing} done {'story has' if missing == 1 else 'stories have'} no change to a done status "
                   f"in the history, so the plan start is used", file=sys.stderr)
 
-    # Find the day open stories started in the implementation status, from their status history.
-    # Only stories that are at least that far along can have been there, so only those are fetched.
+    # Find the stretches open stories spent in the implementation status or a later one, from their
+    # status history. Only stories that are at least that far along can have been there, so only
+    # those are fetched.
     if config.implementation_status:
         impl_progress = config.statuses[config.implementation_status.lower()]
         open_keys = [key for key in ordered_keys
@@ -2518,10 +2537,12 @@ def run_gantt(config_path, history_dir=None, since=None):
         if open_keys:
             print(f"Fetching the status history of {len(open_keys)} open stories...", file=sys.stderr)
             for key in open_keys:
-                day = implementation_start(fetch_status_changes(key), config.implementation_status,
-                                           config.statuses)
-                if day:
-                    story_data[key]["_implementation_date"] = day.isoformat()
+                stretches = implementation_stretches(fetch_status_changes(key), config.implementation_status,
+                                                     config.statuses)
+                if stretches:
+                    story_data[key]["_implementation_date"] = stretches[0][0].isoformat()
+                    story_data[key]["_implementation_stretches"] = [
+                        [start.isoformat(), end.isoformat() if end else ""] for start, end in stretches]
 
     # The planner takes stories in this order; the story rows keep the order of the configuration file
     schedule_keys = ordered_keys

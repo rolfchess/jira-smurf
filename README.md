@@ -98,7 +98,7 @@ example.
 | `use_backlog_order`      | `true` plans the stories in the order of the Jira backlog, and orders the epic rows of the chart by their rank in Jira.                                                        |
 | `auto_assign`            | `false` gives no stories to team members that are not assigned to them in Jira. Stories without an assignee in Jira are planned one after another under "Unassigned", 8 hours a day. The default is `true`. |
 | `work_starts_at`         | This is the status where work on a story starts, for example `"In Progress"`. A done story's bar starts on the first change to this status, or to a status with more progress. |
-| `implementation_status`  | This setting is optional. It is a status from `[statuses]`, for example `"Implementation"`. An open story that is at this status or a later one gets a badge such as `impl 3/2d`: the working days since it started in exactly this status, and its estimate in working days of 8 hours. |
+| `implementation_status`  | This setting is optional. It is a status from `[statuses]`, for example `"Implementation"`. An open story that is at this status or a later one gets a badge such as `impl 3/2d`: the working days it spent in this status or a later one, and its estimate in working days of 8 hours. |
 | `exclude`                | This setting is optional. It is a list of stories to leave out of the chart, for example `["DTICARCH", "ACME-123"]`. A project key such as `"DTICARCH"` leaves out every story of that project. A full key such as `"ACME-123"` leaves out only that story. This also applies to stories from sprints, epics and dependencies. |
 | `holidays`               | This is a list of days off for the whole team, for example `["2026-12-25", "2026-12-26"]`.                                                                                     |
 | `[team."Name"]`          | Hours per weekday (`mon` to `fri`) for each team member. The name must match the display name in Jira.                                                                         |
@@ -128,17 +128,17 @@ How the planning works:
 - An open story has a grey badge after the name with its age: the number of days since it was
   created in Jira, for example `45d`. Hover over it to see the date. Done stories have no age badge.
 - With `implementation_status` set, an open story also has a badge that compares the time in
-  implementation with the estimate, for example `impl 3/2d`: 3 working days since it started in that
-  status, and an estimate of 2 working days (16 hours at 8 hours a day). Weekends and holidays don't count.
-  The badge is green within the estimate and orange over it. Hover over it to see the date and the
-  difference. The start is the last move to that status from an earlier status, such as To Do or
-  Refinement. So a story that was parked and picked up again starts over, but a story that goes back from
-  Code Review for rework keeps its start. This needs one extra Jira call per story that is at that status
+  implementation with the estimate, for example `impl 3/2d`: 3 working days in that status or a later
+  one, and an estimate of 2 working days (16 hours at 8 hours a day). Weekends and holidays don't count.
+  The badge is green within the estimate and orange over it. Hover over it to see the date it first
+  started and the difference. A story that goes back from Code Review for rework keeps counting. The days
+  a story spent back in an earlier status, such as Ready for Development, are left out, and it goes on
+  counting when it is picked up again. This needs one extra Jira call per story that is at that status
   or a later one.
 - Remaining work is the estimate times (1 minus the progress of the status).
 - With `implementation_status` set, a story that started in that status has already used part of its
-  estimate. Its bar starts on that start day, so the days already worked show in the past. From today
-  it gets what is left of the estimate after the hours its team member worked since the start, or what
+  estimate. Its bar starts on the day it first started, so the days already worked show in the past. From today
+  it gets what is left of the estimate after the hours its team member worked in that status or a later one, or what
   its status says is left if that is less. A story that is over its estimate gets what its status says
   is left. For example, a 5 point story that started 3 working days ago has 2 days left.
 - A story without story points gets `default_hours`. Hover over its bar to see that it has no estimate.
