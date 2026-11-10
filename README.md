@@ -96,7 +96,7 @@ example.
 | `include_future_sprints` | `true` also adds all stories in future sprints.                                                                                                                                |
 | `dependency_links`       | This is the list of Jira link types that work as dependencies. The default is `["Blocks"]`. A story that "is blocked by" another story starts after that story is finished. A type in this list must work like Blocks. Use `[]` to ignore Jira links. |
 | `use_backlog_order`      | `true` plans the stories in the order of the Jira backlog, and orders the epic rows of the chart by their rank in Jira.                                                        |
-| `auto_assign`            | `false` gives no stories to team members that are not assigned to them in Jira. Such stories are planned one after another under "Unassigned", 8 hours a day. The default is `true`. |
+| `auto_assign`            | `false` gives no stories to team members that are not assigned to them in Jira. Stories without an assignee in Jira are planned one after another under "Unassigned", 8 hours a day. The default is `true`. |
 | `work_starts_at`         | This is the status where work on a story starts, for example `"In Progress"`. A done story's bar starts on the first change to this status, or to a status with more progress. |
 | `implementation_status`  | This setting is optional. It is a status from `[statuses]`, for example `"Implementation"`. An open story that is at this status or a later one gets a badge such as `impl 3/2d`: the working days since it started in exactly this status, and its estimate in working days of 8 hours. |
 | `exclude`                | This setting is optional. It is a list of stories to leave out of the chart, for example `["DTICARCH", "ACME-123"]`. A project key such as `"DTICARCH"` leaves out every story of that project. A full key such as `"ACME-123"` leaves out only that story. This also applies to stories from sprints, epics and dependencies. |
@@ -120,9 +120,11 @@ How the planning works:
   it), then stories in the active sprint, then all other stories. So work that is already started
   or planned in the sprint is planned before backlog stories, even when those rank higher in Jira.
 - A story never starts before the stories in its `depends_on` list are finished. The same holds for stories that block it in Jira, with a link type from `dependency_links`. Both kinds of dependencies have an arrow in the chart. Links to stories that are not in the plan are ignored.
-- A story assigned in Jira to a team member goes to that member. Other stories go to the auto-assign
-  member who is free first. Such a story has an `AUTO` badge after the name in the chart. With
-  `auto_assign = false`, they go to "Unassigned" instead.
+- A story assigned in Jira to a team member goes to that member. A story assigned in Jira to
+  someone who is not in `[team]` stays with that person: they get their own row, 8 hours a day
+  without days off other than `holidays`, and are never given other stories. Only stories without
+  an assignee in Jira go to the auto-assign member who is free first. Such a story has an `AUTO`
+  badge after the name in the chart. With `auto_assign = false`, they go to "Unassigned" instead.
 - An open story has a grey badge after the name with its age: the number of days since it was
   created in Jira, for example `45d`. Hover over it to see the date. Done stories have no age badge.
 - With `implementation_status` set, an open story also has a badge that compares the time in

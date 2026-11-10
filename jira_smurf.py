@@ -830,11 +830,20 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
     # Then make sure dependencies are always scheduled before dependents
     ordered_keys = topological_sort(ordered_keys, config.dependencies)
 
-    # Without auto-assign, stories without a team member are planned one after another
+    # Without auto-assign, stories without an assignee are planned one after another
     # under "Unassigned", on a standard week
+    standard_week = {"mon": 8, "tue": 8, "wed": 8, "thu": 8, "fri": 8, "days_off": config.holidays}
     team = dict(config.team)
     if not config.auto_assign:
-        team["Unassigned"] = {"mon": 8, "tue": 8, "wed": 8, "thu": 8, "fri": 8, "days_off": config.holidays}
+        team["Unassigned"] = standard_week
+
+    # A story assigned in Jira to someone outside [team] stays with that person, who gets
+    # their own row on a standard week and is never given other stories
+    outsiders = sorted({get_assignee(story_data[key]["fields"]) for key in ordered_keys if key in story_data}
+                       - set(team) - {"Unassigned"})
+    for name in outsiders:
+        print(f"Note: {name} is not in [team], planning their stories on a standard week", file=sys.stderr)
+        team[name] = dict(standard_week, auto_assign=False)
 
     # member_states tracks the next available date per member
     member_states = {}
@@ -872,10 +881,8 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
             member = assignee_name
         else:
             action = "auto-assigning" if config.auto_assign else "planning under 'Unassigned'"
-            if assignee_name in config.team:
+            if assignee_name != "Unassigned":
                 print(f"Warning: assignee '{assignee_name}' for {story_key} has no working hours, {action}", file=sys.stderr)
-            elif assignee_name != "Unassigned":
-                print(f"Warning: assignee '{assignee_name}' for {story_key} not in [team], {action}", file=sys.stderr)
             if config.auto_assign:
                 member = get_earliest_available_member(member_states, team)
                 auto_assigned = True
