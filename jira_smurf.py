@@ -193,6 +193,18 @@ class GanttConfig:
     dependency_links: list  # lowercase names of Jira link types that make a story wait for another
     auto_assign: bool  # give stories without a team member to the team; if False, plan them under "Unassigned"
     implementation_status: str  # status where open stories show their days of work in a badge, "" if not set
+    exclude: list  # [key or project key, ...] — uppercase; stories that match are left out of the chart
+
+
+def is_excluded(key, exclude):
+    """Return True if the issue key matches an entry of exclude.
+
+    An entry with a number, such as "ACME-123", matches that one key. An entry without one,
+    such as "ACME", matches every key of that project.
+    """
+    key = key.upper()
+    project = key.rsplit("-", 1)[0]
+    return any(key == entry or project == entry for entry in exclude)
 
 
 def parse_dates(setting, values, path):
@@ -355,6 +367,12 @@ def load_gantt_config(path="gantt.toml"):
             print(f"Error: '{name}' must be true or false, got {val!r}", file=sys.stderr)
             sys.exit(1)
 
+    # Stories or whole projects to leave out of the chart, such as issues of another team
+    exclude = raw.get("exclude", [])
+    if not isinstance(exclude, list) or not all(isinstance(entry, str) and entry.strip() for entry in exclude):
+        print(f"Error: 'exclude' must be a list of issue keys or project keys, got {exclude!r}", file=sys.stderr)
+        sys.exit(1)
+
     if not epic_keys and not story_keys and not include_open_sprints and not include_future_sprints:
         print(f"Error: [epics] and [stories] are missing or empty in {path}, "
               f"and no sprints are included", file=sys.stderr)
@@ -372,7 +390,8 @@ def load_gantt_config(path="gantt.toml"):
                        use_backlog_order=use_backlog_order,
                        dependency_links=[name.lower() for name in dependency_links],
                        auto_assign=auto_assign_team,
-                       implementation_status=implementation_status or "")
+                       implementation_status=implementation_status or "",
+                       exclude=[entry.strip().upper() for entry in exclude])
 
 
 def fetch_stories_for_epic(epic_key):
@@ -2402,11 +2421,21 @@ def run_gantt(config_path, history_dir=None, since=None):
                 added += 1
         print(f"  Added {added} stories from sprints", file=sys.stderr)
 
+    # Leave out the stories of the exclude list
+    if config.exclude:
+        excluded = [key for key in ordered_keys if is_excluded(key, config.exclude)]
+        for key in excluded:
+            ordered_keys.remove(key)
+            del story_data[key]
+        if excluded:
+            print(f"Excluded {len(excluded)} {'story' if len(excluded) == 1 else 'stories'}: "
+                  f"{', '.join(excluded)}", file=sys.stderr)
+
     # Fetch any dependency targets not already in the scheduled set
     dep_keys_needed = set()
     for deps in config.dependencies.values():
         for dep_key in deps:
-            if dep_key not in story_data:
+            if dep_key not in story_data and not is_excluded(dep_key, config.exclude):
                 dep_keys_needed.add(dep_key)
     if dep_keys_needed:
         print(f"Fetching {len(dep_keys_needed)} dependency stories...", file=sys.stderr)
@@ -2432,6 +2461,11 @@ def run_gantt(config_path, history_dir=None, since=None):
         for key, firsts in linked.items():
             current = config.dependencies.get(key, [])
             config.dependencies[key] = current + sorted(firsts - set(current))
+
+    # A story does not wait for an excluded story
+    if config.exclude:
+        config.dependencies = {key: [dep for dep in deps if not is_excluded(dep, config.exclude)]
+                               for key, deps in config.dependencies.items()}
 
     # Resolve epics and attach to issue dicts
     epic_cache = {}
