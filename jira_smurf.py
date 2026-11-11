@@ -198,6 +198,7 @@ class GanttConfig:
     auto_assign: bool  # give stories without a team member to the team; if False, plan them under "Unassigned"
     implementation_status: str  # status where open stories show their days of work in a badge, "" if not set
     exclude: list  # [key or project key, ...] — uppercase; stories that match are left out of the chart
+    badges: list  # [{field, label, color, stripe}, ...] — badges on epic rows where a Jira field is set
 
 
 def is_excluded(key, exclude):
@@ -336,7 +337,7 @@ def load_gantt_config(path="gantt.toml"):
         print(f"Error: [status_colors] in {path} must be a table", file=sys.stderr)
         sys.exit(1)
     for name, color in status_colors_raw.items():
-        if not isinstance(color, str) or not re.fullmatch(r"[#\w(),.%\s]+", color):
+        if not is_css_color(color):
             print(f"Error: color for status '{name}' must be a CSS color such as \"#ffcccc\", got {color!r}",
                   file=sys.stderr)
             sys.exit(1)
@@ -377,6 +378,8 @@ def load_gantt_config(path="gantt.toml"):
         print(f"Error: 'exclude' must be a list of issue keys or project keys, got {exclude!r}", file=sys.stderr)
         sys.exit(1)
 
+    badges = parse_badges(raw.get("badges", []), path)
+
     if not epic_keys and not story_keys and not include_open_sprints and not include_future_sprints:
         print(f"Error: [epics] and [stories] are missing or empty in {path}, "
               f"and no sprints are included", file=sys.stderr)
@@ -395,7 +398,53 @@ def load_gantt_config(path="gantt.toml"):
                        dependency_links=[name.lower() for name in dependency_links],
                        auto_assign=auto_assign_team,
                        implementation_status=implementation_status or "",
-                       exclude=[entry.strip().upper() for entry in exclude])
+                       exclude=[entry.strip().upper() for entry in exclude],
+                       badges=badges)
+
+
+DEFAULT_BADGE_COLOR = "#d9a520"  # amber, so a badge does not look like the orange "over the estimate" badge
+
+
+def is_css_color(value):
+    """Return True if value looks like a CSS color, such as "#ffcccc" or "rgb(1, 2, 3)"."""
+    return isinstance(value, str) and re.fullmatch(r"[#\w(),.%\s]+", value) is not None
+
+
+def parse_badges(badges_raw, path):
+    """Return the [[badges]] of the configuration as [{field, label, color, stripe}, ...].
+
+    Each badge marks the epic rows where a Jira field, such as a "Paid Feature" checkbox, has a value.
+    """
+    if not isinstance(badges_raw, list) or not all(isinstance(b, dict) for b in badges_raw):
+        print(f"Error: badges in {path} must be a list of [[badges]] tables", file=sys.stderr)
+        sys.exit(1)
+    badges = []
+    for i, badge in enumerate(badges_raw, 1):
+        unknown = set(badge) - {"field", "label", "color", "stripe"}
+        if unknown:
+            print(f"Error: [[badges]] number {i} in {path} has unknown settings: {', '.join(sorted(unknown))}",
+                  file=sys.stderr)
+            sys.exit(1)
+        field = badge.get("field")
+        if not isinstance(field, str) or not re.fullmatch(r"\w+", field.strip()):
+            print(f"Error: [[badges]] number {i} in {path} needs a field ID such as \"customfield_10410\", "
+                  f"got {field!r}", file=sys.stderr)
+            sys.exit(1)
+        label = badge.get("label", "")
+        if not isinstance(label, str):
+            print(f"Error: 'label' of badge {field} must be text, got {label!r}", file=sys.stderr)
+            sys.exit(1)
+        color = badge.get("color", DEFAULT_BADGE_COLOR)
+        if not is_css_color(color):
+            print(f"Error: 'color' of badge {field} must be a CSS color such as \"#d9a520\", got {color!r}",
+                  file=sys.stderr)
+            sys.exit(1)
+        stripe = badge.get("stripe", False)
+        if not isinstance(stripe, bool):
+            print(f"Error: 'stripe' of badge {field} must be true or false, got {stripe!r}", file=sys.stderr)
+            sys.exit(1)
+        badges.append({"field": field.strip(), "label": label.strip(), "color": color, "stripe": stripe})
+    return badges
 
 
 def fetch_stories_for_epic(epic_key):
@@ -630,24 +679,71 @@ def link_dependencies(issues, link_types):
     return dependencies
 
 
-def find_start_date_field():
-    """Return the id of the Jira field named "Start date", or None if there is none."""
+def fetch_jira_fields():
+    """Return the list of all Jira fields, or [] if Jira does not give it."""
     try:
-        fields = jira_get("field")
+        return jira_get("field")
     except requests.RequestException:
-        return None
-    for field in fields:
+        return []
+
+
+def find_start_date_field(jira_fields):
+    """Return the id of the Jira field named "Start date", or None if there is none."""
+    for field in jira_fields:
         if field.get("name", "").lower() == "start date" and (field.get("schema") or {}).get("type") == "date":
             return field["id"]
     return None
 
 
-def fetch_epics(epic_keys, start_date_field=None):
-    """Return {epic key: {key, name, start, due}} for the given epics.
+def field_values(value):
+    """Return the value of a Jira field as a list of texts, or [] when the field is empty.
+
+    This handles text, numbers, checkboxes and select lists (options with a "value"),
+    users (with a "displayName") and other objects with a "name".
+    """
+    if value is None or value is False or value == "":
+        return []
+    if isinstance(value, list):
+        return [text for item in value for text in field_values(item)]
+    if isinstance(value, dict):
+        for key in ("value", "displayName", "name"):
+            if value.get(key):
+                return [str(value[key])]
+        return []
+    if value is True:
+        return ["Yes"]
+    return [str(value)]
+
+
+def epic_badges(fields, badges, field_names):
+    """Return the badges for an epic with these Jira fields, as [{text, title, color, stripe}, ...].
+
+    An epic gets a badge when the field of that badge has a value. The badge shows its label,
+    or the values of the field when it has no label.
+    """
+    result = []
+    for badge in badges:
+        values = field_values(fields.get(badge["field"]))
+        if not values:
+            continue
+        name = field_names.get(badge["field"], badge["field"])
+        result.append({
+            "text": badge["label"] or ", ".join(values),
+            "title": f"{name}: {', '.join(values)}",
+            "color": badge["color"],
+            "stripe": badge["stripe"],
+        })
+    return result
+
+
+def fetch_epics(epic_keys, start_date_field=None, badges=(), field_names=None):
+    """Return {epic key: {key, name, start, due, badges}} for the given epics.
 
     start and due are YYYY-MM-DD strings, or "" when the epic has no such date in Jira.
+    badges is the list from epic_badges for the [[badges]] of the configuration.
     """
-    fields = "summary,duedate" + (f",{start_date_field}" if start_date_field else "")
+    fields = ",".join(["summary", "duedate"] + ([start_date_field] if start_date_field else [])
+                      + [badge["field"] for badge in badges])
     jql = f"key in ({', '.join(epic_keys)})"
     epics = {}
     next_page_token = None
@@ -663,6 +759,7 @@ def fetch_epics(epic_keys, start_date_field=None):
                 "name": f.get("summary") or issue["key"],
                 "start": (f.get(start_date_field) or "")[:10] if start_date_field else "",
                 "due": (f.get("duedate") or "")[:10],
+                "badges": epic_badges(f, badges, field_names or {}),
             }
         next_page_token = data.get("nextPageToken")
         if not next_page_token:
@@ -1457,6 +1554,21 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     row_names = [row if kind == "stories" else row["name"] for kind, row in epic_rows]
     epic_color_map = {name: EPIC_COLORS[i % len(EPIC_COLORS)] for i, name in enumerate(row_names)}
 
+    # The [[badges]] of an epic: pills after its name, and a stripe on the left of its row.
+    # Each stripe color has one CSS class.
+    stripe_classes = {}
+
+    def badge_fields(epic_key):
+        badges = epics_info.get(epic_key, {}).get("badges", [])
+        pills = "".join(
+            f" <span class='field-badge' style='--badge-color: {b['color']}' "
+            f"title='{html.escape(b['title'])}'>{html.escape(b['text'])}</span>"
+            for b in badges)
+        stripe = next((b["color"] for b in badges if b["stripe"]), None)
+        if stripe and stripe not in stripe_classes:
+            stripe_classes[stripe] = f"badge-stripe-{len(stripe_classes)}"
+        return {"badges_html": pills, "stripe_class": stripe_classes.get(stripe, "")}
+
     # Create a parent task per epic
     for kind, row in epic_rows:
         task_id += 1
@@ -1478,6 +1590,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
                 "roadmap": True,
                 "is_epic": True,
                 "due_date": row["due"],
+                **badge_fields(row["key"]),
             })
             continue
         epic_name = row
@@ -1527,6 +1640,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             "story_key": epic_name_to_key.get(epic_name, ""),
             "due_date": epics_info.get(epic_name_to_key.get(epic_name, ""), {}).get("due", ""),
             "progress": epic_progress,
+            **badge_fields(epic_name_to_key.get(epic_name, "")),
             **(changes["epics"].get(epic_name, {}) if changes else {}),
         })
 
@@ -1670,6 +1784,10 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
         f"  .gantt_row.{cls}, .gantt_task_row.{cls} {{ background: {status_colors[name]}; }}"
         for name, cls in status_classes.items()
     )
+    status_css += "".join(
+        f"\n  .gantt_row.{cls} .gantt_cell:first-child {{ box-shadow: inset 4px 0 0 {color}; }}"
+        for color, cls in stripe_classes.items()
+    )
 
     print(f"""<!DOCTYPE html>
 <html lang="en">
@@ -1734,6 +1852,15 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   }}
   /* Longer in implementation than the estimate */
   .impl-badge.impl-over {{ border-color: #f0c08a; background: #fdf1e3; color: #9a5a12; }}
+  /* A [[badges]] pill on an epic row, in a light and a dark shade of the color of the badge */
+  .field-badge {{
+    display: inline-block; margin-left: 4px; padding: 0 5px; border-radius: 7px;
+    border: 1px solid color-mix(in srgb, var(--badge-color) 55%, #fff);
+    background: color-mix(in srgb, var(--badge-color) 15%, #fff);
+    color: color-mix(in srgb, var(--badge-color) 65%, #000);
+    font-size: 9px; font-weight: 600; line-height: 12px; letter-spacing: 0.3px;
+    text-transform: uppercase; vertical-align: 1px; cursor: help;
+  }}
   /* Story points in the Points column; the green of the impl badge */
   .points-badge {{
     display: inline-block; min-width: 14px; padding: 0 6px; border: 1px solid #b9dcc4; border-radius: 8px;
@@ -1899,7 +2026,8 @@ gantt.config.columns = [
       var image = typeIconImages[task.icon_url];
       var icon = image ? "<img class='type-icon' src='" + image + "' alt=''>" :
         task.icon ? "<span class='type-icon'>" + task.icon + "</span>" : "";
-      return icon + "<span title='" + task.text.replace(/'/g, "&#39;") + "'>" + task.text + "</span>";
+      return icon + "<span title='" + task.text.replace(/'/g, "&#39;") + "'>" + task.text + "</span>" +
+        (task.badges_html || "");
     }} }},
   {{name: "status", label: "Status", align: "left", width: 120, resize: true}},
   {{name: "points", label: "Points", align: "center", width: 70, resize: true,
@@ -2192,7 +2320,7 @@ gantt.templates.task_row_class = function(start, end, task) {{
 }};
 gantt.templates.grid_row_class = function(start, end, task) {{
   var base = joinClasses(epicRowClass(task), task.progress >= 1 ? "task-done-row" : "",
-    statusRowClass(task), changeRowClass(task));
+    statusRowClass(task), changeRowClass(task), task.stripe_class || "");
   if (!searchTerm) return base;
   if (searchMatchIds[task.id]) return (base + " search-match-row").trim();
   if (searchVisibleIds[task.id]) return base;
@@ -2592,7 +2720,13 @@ def run_gantt(config_path, history_dir=None, since=None):
     epics_info = {}
     if epic_keys:
         print(f"Fetching the dates of {len(epic_keys)} epics...", file=sys.stderr)
-        epics_info = fetch_epics(epic_keys, find_start_date_field())
+        jira_fields = fetch_jira_fields()
+        field_names = {field["id"]: field.get("name", field["id"]) for field in jira_fields if field.get("id")}
+        for badge in config.badges:
+            if jira_fields and badge["field"] not in field_names:
+                print(f"Warning: badge field {badge['field']} is not a field in Jira, "
+                      f"so no epic gets this badge", file=sys.stderr)
+        epics_info = fetch_epics(epic_keys, find_start_date_field(jira_fields), config.badges, field_names)
     roadmap_epics = []
     for key in empty_epics:
         info = epics_info.get(key)
