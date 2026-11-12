@@ -690,10 +690,12 @@ def link_dependencies(issues, link_types):
 
 
 def fetch_jira_fields():
-    """Return the list of all Jira fields, or [] if Jira does not give it."""
+    """Return the list of all Jira fields, or [] with a warning if Jira does not give it."""
     try:
         return jira_get("field")
-    except requests.RequestException:
+    except requests.RequestException as e:
+        print(f"Warning: could not read the list of Jira fields ({e}), so epics get no start date, "
+              f"badge fields are not checked and badge tooltips show field IDs", file=sys.stderr)
         return []
 
 
