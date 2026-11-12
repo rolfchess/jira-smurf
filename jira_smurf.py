@@ -1588,8 +1588,8 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     epic_color_map = {name: EPIC_COLORS[i % len(EPIC_COLORS)] for i, name in enumerate(row_names)}
 
     # The [[badges]] of an epic: pills before its name, so a long name does not push them out of
-    # the Story column, and a stripe on the left of its row.
-    # Each stripe color has one CSS class.
+    # the Story column, and stripes on the left of its row, side by side when several badges have one.
+    # Each combination of stripe colors has one CSS class.
     stripe_classes = {}
 
     def badge_fields(epic_key):
@@ -1598,10 +1598,10 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             f"<span class='field-badge' style='--badge-color: {b['color']}' "
             f"title='{html.escape(b['title'])}'>{html.escape(b['text'])}</span>"
             for b in badges)
-        stripe = next((b["color"] for b in badges if b["stripe"]), None)
-        if stripe and stripe not in stripe_classes:
-            stripe_classes[stripe] = f"badge-stripe-{len(stripe_classes)}"
-        return {"badges_html": pills, "stripe_class": stripe_classes.get(stripe, "")}
+        stripes = tuple(dict.fromkeys(b["color"] for b in badges if b["stripe"]))
+        if stripes and stripes not in stripe_classes:
+            stripe_classes[stripes] = f"badge-stripe-{len(stripe_classes)}"
+        return {"badges_html": pills, "stripe_class": stripe_classes.get(stripes, "")}
 
     # Create a parent task per epic
     for kind, row in epic_rows:
@@ -1819,8 +1819,10 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
         for name, cls in status_classes.items()
     )
     status_css += "".join(
-        f"\n  .gantt_row.{cls} .gantt_cell:first-child {{ box-shadow: inset 4px 0 0 {color}; }}"
-        for color, cls in stripe_classes.items()
+        # One 4px stripe per color; a wider shadow lies under the narrower ones before it
+        f"\n  .gantt_row.{cls} .gantt_cell:first-child {{ box-shadow: "
+        f"{', '.join(f'inset {4 * (i + 1)}px 0 0 {color}' for i, color in enumerate(colors))}; }}"
+        for colors, cls in stripe_classes.items()
     )
 
     print(f"""<!DOCTYPE html>
