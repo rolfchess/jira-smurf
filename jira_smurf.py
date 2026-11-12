@@ -709,6 +709,7 @@ def field_values(value):
     """Return the value of a Jira field as a list of texts, or [] when the field is empty.
 
     This handles text, numbers, checkboxes and select lists (options with a "value"),
+    cascading selects (an option with a "child" option, as "Parent > Child"),
     users (with a "displayName"), other objects with a "name", and rich text (an ADF document).
     """
     if value is None or value is False or value == "":
@@ -721,7 +722,8 @@ def field_values(value):
     if isinstance(value, dict):
         for key in ("value", "displayName", "name"):
             if value.get(key):
-                return [str(value[key])]
+                child = field_values(value.get("child"))
+                return [f"{value[key]} > {child[0]}" if child else str(value[key])]
         return []
     if value is True:
         return ["Yes"]
@@ -744,16 +746,20 @@ def epic_badges(fields, badges, field_names):
     """Return the badges for an epic with these Jira fields, as [{text, title, color, stripe}, ...].
 
     An epic gets a badge when the field of that badge has a value: one of the 'values' of the badge,
-    or without 'values' any value but "No", "False" or 0. The badge shows its label, or those values
-    of the field when it has no label.
+    or without 'values' any value but "No", "False" or 0. A value "Parent > Child" of a cascading
+    select also matches on its parent alone. The badge shows its label, or those values of the field
+    when it has no label.
     """
+    def matches(value, texts):
+        return value.lower() in texts or value.split(" > ", 1)[0].lower() in texts
+
     result = []
     for badge in badges:
         values = field_values(fields.get(badge["field"]))
         if badge["values"]:
-            values = [v for v in values if v.lower() in badge["values"]]
+            values = [v for v in values if matches(v, badge["values"])]
         else:
-            values = [v for v in values if v.lower() not in NO_BADGE_VALUES]
+            values = [v for v in values if not matches(v, NO_BADGE_VALUES)]
         if not values:
             continue
         name = field_names.get(badge["field"], badge["field"])
