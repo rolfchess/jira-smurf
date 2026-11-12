@@ -403,6 +403,8 @@ def load_gantt_config(path="gantt.toml"):
 
 
 DEFAULT_BADGE_COLOR = "#d9a520"  # amber, so a badge does not look like the orange "over the estimate" badge
+# Without 'values', a badge ignores these field values, so a Yes/No select set to "No" gives no badge
+NO_BADGE_VALUES = {"no", "false"}
 
 
 def is_css_color(value):
@@ -411,16 +413,17 @@ def is_css_color(value):
 
 
 def parse_badges(badges_raw, path):
-    """Return the [[badges]] of the configuration as [{field, label, color, stripe}, ...].
+    """Return the [[badges]] of the configuration as [{field, label, color, stripe, values}, ...].
 
     Each badge marks the epic rows where a Jira field, such as a "Paid Feature" checkbox, has a value.
+    values are the lowercase field values that give the badge, or [] for any value but "No" or "False".
     """
     if not isinstance(badges_raw, list) or not all(isinstance(b, dict) for b in badges_raw):
         print(f"Error: badges in {path} must be a list of [[badges]] tables", file=sys.stderr)
         sys.exit(1)
     badges = []
     for i, badge in enumerate(badges_raw, 1):
-        unknown = set(badge) - {"field", "label", "color", "stripe"}
+        unknown = set(badge) - {"field", "label", "color", "stripe", "values"}
         if unknown:
             print(f"Error: [[badges]] number {i} in {path} has unknown settings: {', '.join(sorted(unknown))}",
                   file=sys.stderr)
@@ -443,7 +446,13 @@ def parse_badges(badges_raw, path):
         if not isinstance(stripe, bool):
             print(f"Error: 'stripe' of badge {field} must be true or false, got {stripe!r}", file=sys.stderr)
             sys.exit(1)
-        badges.append({"field": field.strip(), "label": label.strip(), "color": color, "stripe": stripe})
+        values = badge.get("values", [])
+        if not isinstance(values, list) or not all(isinstance(v, str) and v.strip() for v in values):
+            print(f"Error: 'values' of badge {field} must be a list of texts such as [\"Yes\"], got {values!r}",
+                  file=sys.stderr)
+            sys.exit(1)
+        badges.append({"field": field.strip(), "label": label.strip(), "color": color, "stripe": stripe,
+                       "values": [v.strip().lower() for v in values]})
     return badges
 
 
@@ -718,12 +727,17 @@ def field_values(value):
 def epic_badges(fields, badges, field_names):
     """Return the badges for an epic with these Jira fields, as [{text, title, color, stripe}, ...].
 
-    An epic gets a badge when the field of that badge has a value. The badge shows its label,
-    or the values of the field when it has no label.
+    An epic gets a badge when the field of that badge has a value: one of the 'values' of the badge,
+    or without 'values' any value but "No" or "False". The badge shows its label, or those values
+    of the field when it has no label.
     """
     result = []
     for badge in badges:
         values = field_values(fields.get(badge["field"]))
+        if badge["values"]:
+            values = [v for v in values if v.lower() in badge["values"]]
+        else:
+            values = [v for v in values if v.lower() not in NO_BADGE_VALUES]
         if not values:
             continue
         name = field_names.get(badge["field"], badge["field"])

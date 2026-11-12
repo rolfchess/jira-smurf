@@ -83,6 +83,7 @@ field = "customfield_10410"  # the Jira field ID
 label = "Paid"               # optional: the text on the badge; without it the badge shows the field's values
 color = "#d9a520"            # optional: a CSS color, amber by default
 stripe = true                # optional: also a stripe in this color on the left of the epic row
+values = ["Yes"]             # optional: only these field values give the badge; without it any value but "No" or "False"
 
 [epics]
 # All stories of these epics are planned, in this order.
