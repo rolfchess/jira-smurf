@@ -1601,7 +1601,9 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
         stripes = tuple(dict.fromkeys(b["color"] for b in badges if b["stripe"]))
         if stripes and stripes not in stripe_classes:
             stripe_classes[stripes] = f"badge-stripe-{len(stripe_classes)}"
-        return {"badges_html": pills, "stripe_class": stripe_classes.get(stripes, "")}
+        # The search box also finds an epic by the text and tooltip of its badges
+        search_text = " ".join(f"{b['text']} {b['title']}" for b in badges)
+        return {"badges_html": pills, "badges_text": search_text, "stripe_class": stripe_classes.get(stripes, "")}
 
     # Create a parent task per epic
     for kind, row in epic_rows:
@@ -2377,7 +2379,7 @@ function onSearchInput() {{
   var firstMatchId = null;
   var matchCount = 0;
   gantt.eachTask(function(task) {{
-    var hay = ((task.text || "") + " " + (task.story_key || "")).toLowerCase();
+    var hay = ((task.text || "") + " " + (task.story_key || "") + " " + (task.badges_text || "")).toLowerCase();
     if (hay.indexOf(raw) !== -1) {{
       searchMatchIds[task.id] = true;
       searchVisibleIds[task.id] = true;

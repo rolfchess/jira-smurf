@@ -156,7 +156,7 @@ How the planning works:
   first change to a status with progress above 0. It ends on the last change to a status at 100. A
   done story without such a change is placed at the start of the plan.
 
-In the chart you can zoom, search for a story and show or hide done stories. Done stories are hidden
+In the chart you can zoom, search for a story (or for an epic by its badges) and show or hide done stories. Done stories are hidden
 at first. Click a team member badge above the table to show only the stories of that member. You can
 select more than one member, and "Unassigned". The epic rows then show the points of the stories
 that are shown. The Points and Sprint columns show the story points and the number of
