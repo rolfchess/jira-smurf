@@ -1554,14 +1554,15 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     row_names = [row if kind == "stories" else row["name"] for kind, row in epic_rows]
     epic_color_map = {name: EPIC_COLORS[i % len(EPIC_COLORS)] for i, name in enumerate(row_names)}
 
-    # The [[badges]] of an epic: pills after its name, and a stripe on the left of its row.
+    # The [[badges]] of an epic: pills before its name, so a long name does not push them out of
+    # the Story column, and a stripe on the left of its row.
     # Each stripe color has one CSS class.
     stripe_classes = {}
 
     def badge_fields(epic_key):
         badges = epics_info.get(epic_key, {}).get("badges", [])
         pills = "".join(
-            f" <span class='field-badge' style='--badge-color: {b['color']}' "
+            f"<span class='field-badge' style='--badge-color: {b['color']}' "
             f"title='{html.escape(b['title'])}'>{html.escape(b['text'])}</span>"
             for b in badges)
         stripe = next((b["color"] for b in badges if b["stripe"]), None)
@@ -1854,7 +1855,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   .impl-badge.impl-over {{ border-color: #f0c08a; background: #fdf1e3; color: #9a5a12; }}
   /* A [[badges]] pill on an epic row, in a light and a dark shade of the color of the badge */
   .field-badge {{
-    display: inline-block; margin-left: 4px; padding: 0 5px; border-radius: 7px;
+    display: inline-block; margin-right: 4px; padding: 0 5px; border-radius: 7px;
     border: 1px solid color-mix(in srgb, var(--badge-color) 55%, #fff);
     background: color-mix(in srgb, var(--badge-color) 15%, #fff);
     color: color-mix(in srgb, var(--badge-color) 65%, #000);
@@ -2026,8 +2027,9 @@ gantt.config.columns = [
       var image = typeIconImages[task.icon_url];
       var icon = image ? "<img class='type-icon' src='" + image + "' alt=''>" :
         task.icon ? "<span class='type-icon'>" + task.icon + "</span>" : "";
-      return icon + "<span title='" + task.text.replace(/'/g, "&#39;") + "'>" + task.text + "</span>" +
-        (task.badges_html || "");
+      // The badges come before the name, so a long name does not hide them
+      return icon + (task.badges_html || "") +
+        "<span title='" + task.text.replace(/'/g, "&#39;") + "'>" + task.text + "</span>";
     }} }},
   {{name: "status", label: "Status", align: "left", width: 120, resize: true}},
   {{name: "points", label: "Points", align: "center", width: 70, resize: true,
