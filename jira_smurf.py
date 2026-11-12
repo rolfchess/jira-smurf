@@ -403,8 +403,9 @@ def load_gantt_config(path="gantt.toml"):
 
 
 DEFAULT_BADGE_COLOR = "#d9a520"  # amber, so a badge does not look like the orange "over the estimate" badge
-# Without 'values', a badge ignores these field values, so a Yes/No select set to "No" gives no badge
-NO_BADGE_VALUES = {"no", "false"}
+# Without 'values', a badge ignores these field values, so a Yes/No select set to "No"
+# or a number field set to 0 gives no badge
+NO_BADGE_VALUES = {"no", "false", "0"}
 
 
 def is_css_color(value):
@@ -416,7 +417,7 @@ def parse_badges(badges_raw, path):
     """Return the [[badges]] of the configuration as [{field, label, color, stripe, values}, ...].
 
     Each badge marks the epic rows where a Jira field, such as a "Paid Feature" checkbox, has a value.
-    values are the lowercase field values that give the badge, or [] for any value but "No" or "False".
+    values are the lowercase field values that give the badge, or [] for any value but "No", "False" or 0.
     """
     if not isinstance(badges_raw, list) or not all(isinstance(b, dict) for b in badges_raw):
         print(f"Error: badges in {path} must be a list of [[badges]] tables", file=sys.stderr)
@@ -724,6 +725,8 @@ def field_values(value):
         return []
     if value is True:
         return ["Yes"]
+    if isinstance(value, float) and value.is_integer():
+        return [str(int(value))]  # Jira gives numbers as floats; show 5, not 5.0
     return [str(value)]
 
 
@@ -741,7 +744,7 @@ def epic_badges(fields, badges, field_names):
     """Return the badges for an epic with these Jira fields, as [{text, title, color, stripe}, ...].
 
     An epic gets a badge when the field of that badge has a value: one of the 'values' of the badge,
-    or without 'values' any value but "No" or "False". The badge shows its label, or those values
+    or without 'values' any value but "No", "False" or 0. The badge shows its label, or those values
     of the field when it has no label.
     """
     result = []
