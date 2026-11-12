@@ -708,12 +708,15 @@ def field_values(value):
     """Return the value of a Jira field as a list of texts, or [] when the field is empty.
 
     This handles text, numbers, checkboxes and select lists (options with a "value"),
-    users (with a "displayName") and other objects with a "name".
+    users (with a "displayName"), other objects with a "name", and rich text (an ADF document).
     """
     if value is None or value is False or value == "":
         return []
     if isinstance(value, list):
         return [text for item in value for text in field_values(item)]
+    if isinstance(value, dict) and value.get("type") == "doc":
+        text = " ".join(adf_text(value).split())
+        return [text] if text else []
     if isinstance(value, dict):
         for key in ("value", "displayName", "name"):
             if value.get(key):
@@ -722,6 +725,16 @@ def field_values(value):
     if value is True:
         return ["Yes"]
     return [str(value)]
+
+
+def adf_text(node):
+    """Return the text in a rich text (ADF) node of Jira, with a space between its blocks."""
+    if node.get("type") == "text":
+        return node.get("text", "")
+    return " ".join(adf_text(child) for child in node.get("content", []) if isinstance(child, dict))
+
+
+BADGE_TEXT_LENGTH = 30  # longer field values are cut off on the badge; the tooltip has all of it
 
 
 def epic_badges(fields, badges, field_names):
@@ -741,8 +754,11 @@ def epic_badges(fields, badges, field_names):
         if not values:
             continue
         name = field_names.get(badge["field"], badge["field"])
+        text = badge["label"] or ", ".join(values)
+        if len(text) > BADGE_TEXT_LENGTH:
+            text = text[:BADGE_TEXT_LENGTH - 1].rstrip() + "…"
         result.append({
-            "text": badge["label"] or ", ".join(values),
+            "text": text,
             "title": f"{name}: {', '.join(values)}",
             "color": badge["color"],
             "stripe": badge["stripe"],
