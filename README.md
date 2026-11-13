@@ -103,6 +103,7 @@ example.
 | `holidays`               | This is a list of days off for the whole team, for example `["2026-12-25", "2026-12-26"]`.                                                                                     |
 | `[team."Name"]`          | Hours per weekday (`mon` to `fri`) for each team member. The name must match the display name in Jira.                                                                         |
 | `auto_assign`            | Per team member. `false` means the member gets no unassigned stories. Such a member may have no hours. This has no effect when the top-level `auto_assign` is `false`.                                                                       |
+| `in_team`                | This is set per team member. It is a list of periods in which the member is in the team, for example `["to 2026-06-30", "2026-09-01 to"]`. An empty side means the period has no start or no end. Outside these periods, the member has 0 hours, both in the plan and in the velocity. Without `in_team`, the member is always in the team. |
 | `days_off`               | This is set per team member. It is a list of days off, for example `["2026-12-10", "2026-12-18 to 2027-01-01"]`. A range includes both days. No work is planned on those days. |
 | `[statuses]`             | Progress in percent for each Jira status. A story at 100 is done.                                                                                                              |
 | `[status_colors]`        | This sets a row background color for each Jira status, for example `"Blocked" = "#ffcccc"`.                                                                                    |
@@ -123,9 +124,14 @@ How the planning works:
 - A story never starts before the stories in its `depends_on` list are finished. The same holds for stories that block it in Jira, with a link type from `dependency_links`. Both kinds of dependencies have an arrow in the chart. Links to stories that are not in the plan are ignored.
 - A story assigned in Jira to a team member goes to that member. A story assigned in Jira to
   someone who is not in `[team]` stays with that person: they get their own row, 8 hours a day
-  without days off other than `holidays`, and are never given other stories. Only stories without
-  an assignee in Jira go to the auto-assign member who is free first. Such a story has an `AUTO`
-  badge after the name in the chart. With `auto_assign = false`, they go to "Unassigned" instead.
+  without days off other than `holidays`, and are never given other stories. Add them to `[team]`
+  to plan them with their real hours. Only stories without an assignee in Jira go to the auto-assign
+  member who finishes them first. Such a story has an `AUTO` badge after the name in the chart. With
+  `auto_assign = false`, they go to "Unassigned" instead.
+- A member who leaves the team before a story is finished does not get it, unless nobody can finish
+  it. A story assigned in Jira to a member who has already left the team is planned as a story without
+  an assignee.
+- A done story keeps its assignee from Jira. It does not use the hours of anyone in the team.
 - An open story has a grey badge after the name with its age: the number of days since it was
   created in Jira, for example `45d`. Hover over it to see the date. Done stories have no age badge.
 - With `implementation_status` set, an open story also has a badge that compares the time in
@@ -206,14 +212,18 @@ For each week, it adds up:
 
 - the team hours from `gantt.toml`, without days off and holidays;
 - the story points of the stories that moved to a done status in that week and are assigned to a
-  team member.
+  team member. A story without points counts as `default_hours` divided by `velocity` points, so
+  with 40 hours and a velocity of 8 it counts as 5 points.
 
 The hours divided by the points give the velocity. Use the total as `velocity` in `gantt.toml`. The
 weekly numbers show how much it varies.
 
-The result is less exact when the team changed during the period, because `gantt.toml` describes the
-team as it is now. All other work, such as meetings and bugs without points, counts in the hours. A
+The result is only exact when `gantt.toml` describes the team of the whole period. Use `in_team` to
+record when people joined or left the team. All other work, such as meetings and bugs without points, counts in the hours. A
 story counts in full in the week it was finished.
+
+Read [Velocity: how fast does the team really work?](documentation/velocity.md) for how velocity
+works, and for what your team can do to keep it steady.
 
 ## Notes
 
