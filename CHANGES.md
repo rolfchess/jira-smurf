@@ -21,6 +21,8 @@ The tool has no version numbers yet. This file lists the changes per week, newes
 - Keep the bar colors and row backgrounds when you print the Gantt chart.
 - Restore the blinking red outline on a story or epic that ends after its due date.
 - Show a story that is behind the baseline with a yellow outline, not a red one.
+- Add the optional `[visuals]` section to `gantt.toml`, with `past_due_blink` to stop the blinking
+  and `past_due_color` to set the color of the outline of a story that ends after its due date.
 
 ## Week of 2026-11-02
 

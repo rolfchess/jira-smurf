@@ -199,6 +199,7 @@ class GanttConfig:
     implementation_status: str  # status where open stories show their days of work in a badge, "" if not set
     exclude: list  # [key or project key, ...] — uppercase; stories that match are left out of the chart
     badges: list  # [{field, label, color, stripe}, ...] — badges on epic rows where a Jira field is set
+    visuals: dict  # {past_due_blink: bool, past_due_color: css_color} — how the chart looks
 
 
 def is_excluded(key, exclude):
@@ -408,6 +409,7 @@ def load_gantt_config(path="gantt.toml"):
         sys.exit(1)
 
     badges = parse_badges(raw.get("badges", []), path)
+    visuals = parse_visuals(raw.get("visuals", {}), path)
 
     if not epic_keys and not story_keys and not include_open_sprints and not include_future_sprints:
         print(f"Error: [epics] and [stories] are missing or empty in {path}, "
@@ -428,7 +430,8 @@ def load_gantt_config(path="gantt.toml"):
                        auto_assign=auto_assign_team,
                        implementation_status=implementation_status or "",
                        exclude=[entry.strip().upper() for entry in exclude],
-                       badges=badges)
+                       badges=badges,
+                       visuals=visuals)
 
 
 DEFAULT_BADGE_COLOR = "#d9a520"  # amber, so a badge does not look like the orange "over the estimate" badge
@@ -489,6 +492,33 @@ def parse_badges(badges_raw, path):
         badges.append({"field": field.strip(), "label": label.strip(), "color": color, "stripe": stripe,
                        "values": [v.strip().lower() for v in values]})
     return badges
+
+
+DEFAULT_VISUALS = {"past_due_blink": True, "past_due_color": "#d62728"}
+
+
+def parse_visuals(visuals_raw, path):
+    """Return the [visuals] of the configuration as {past_due_blink, past_due_color}.
+
+    Each setting is optional and has the value of DEFAULT_VISUALS when it is left out.
+    """
+    if not isinstance(visuals_raw, dict):
+        print(f"Error: [visuals] in {path} must be a table", file=sys.stderr)
+        sys.exit(1)
+    unknown = set(visuals_raw) - set(DEFAULT_VISUALS)
+    if unknown:
+        print(f"Error: [visuals] in {path} has unknown settings: {', '.join(sorted(unknown))}", file=sys.stderr)
+        sys.exit(1)
+    visuals = dict(DEFAULT_VISUALS, **visuals_raw)
+    if not isinstance(visuals["past_due_blink"], bool):
+        print(f"Error: 'past_due_blink' in [visuals] must be true or false, got {visuals['past_due_blink']!r}",
+              file=sys.stderr)
+        sys.exit(1)
+    if not is_css_color(visuals["past_due_color"]):
+        print(f"Error: 'past_due_color' in [visuals] must be a CSS color such as \"#d62728\", "
+              f"got {visuals['past_due_color']!r}", file=sys.stderr)
+        sys.exit(1)
+    return visuals
 
 
 def fetch_stories_for_epic(epic_key):
@@ -1660,7 +1690,7 @@ EPIC_COLORS = [
 
 def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=(), status_colors=None,
                      changes=None, snapshots=(), icon_images=None, epic_icon_url="",
-                     epics_info=None, roadmap_epics=(), epic_order=()):
+                     epics_info=None, roadmap_epics=(), epic_order=(), visuals=None):
     """Write a self-contained HTML file with a DHTMLX Gantt chart.
 
     With changes (from compare_plans), the chart can mark what changed since the baseline.
@@ -1671,6 +1701,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     epics without stories; each is shown as a striped bar from its start to its due date.
     epic_order is the list of epic keys in the order of the epic rows. Epics that are not in it
     come after them.
+    visuals is the [visuals] of the configuration, from parse_visuals.
     """
     # Assign colors to epics
     epics_seen = []
@@ -1944,6 +1975,21 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     summary_html = changes_summary_html(changes) if changes else ""
     trend = trend_html(list(snapshots), epic_color_map, set(holidays), changes["since"] if changes else None)
 
+    # The outline of a story or epic that ends after its due date, blinking or not
+    visuals = visuals or DEFAULT_VISUALS
+    past_due = visuals["past_due_color"]
+    past_due_css = (f"  .gantt_task_line.due-late {{ box-shadow: 0 0 0 2px {past_due}, "
+                    f"0 0 6px 3px color-mix(in srgb, {past_due} 45%, transparent); }}")
+    if visuals["past_due_blink"]:
+        past_due_css = f"""  .gantt_task_line.due-late {{ box-shadow: 0 0 0 2px {past_due}; animation: due-late-glow 0.5s ease-in-out infinite; }}
+  @keyframes due-late-glow {{
+    0%, 100% {{ box-shadow: 0 0 0 2px {past_due}, 0 0 2px 1px color-mix(in srgb, {past_due} 30%, transparent); }}
+    50% {{ box-shadow: 0 0 0 2px {past_due}, 0 0 8px 4px color-mix(in srgb, {past_due} 60%, transparent); }}
+  }}
+  @media (prefers-reduced-motion: reduce) {{
+    .gantt_task_line.due-late {{ animation: none; }}
+  }}"""
+
     # Each status color has one CSS class, used on the grid row and the timeline row
     status_colors = status_colors or {}
     status_classes = {name: f"status-color-{i}" for i, name in enumerate(status_colors)}
@@ -2075,14 +2121,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     background-image: repeating-linear-gradient(45deg, rgba(255,255,255,0.45) 0 6px, transparent 6px 12px); }}
   .gantt_task_line.no-bar {{ display: none; }}
   .gantt_task_line.change-late {{ box-shadow: 0 0 0 2px #f2c200, 0 0 6px 3px rgba(242, 194, 0, 0.6); }}
-  .gantt_task_line.due-late {{ box-shadow: 0 0 0 2px #d62728; animation: due-late-glow 0.5s ease-in-out infinite; }}
-  @keyframes due-late-glow {{
-    0%, 100% {{ box-shadow: 0 0 0 2px #d62728, 0 0 2px 1px rgba(214, 39, 40, 0.3); }}
-    50% {{ box-shadow: 0 0 0 2px #d62728, 0 0 8px 4px rgba(214, 39, 40, 0.6); }}
-  }}
-  @media (prefers-reduced-motion: reduce) {{
-    .gantt_task_line.due-late {{ animation: none; }}
-  }}
+{past_due_css}
   .delta-up {{ color: #c62828; font-weight: 600; }}
   .delta-down {{ color: #2e7d32; font-weight: 600; }}
   .due-marker {{ position: absolute; width: 10px; height: 10px; background: #d62728; border: 1px solid #fff;
@@ -2947,7 +2986,8 @@ def run_gantt(config_path, history_dir=None, since=None):
         icon_images = fetch_icon_images(icon_urls)
 
     write_gantt_html(scheduled, config.statuses, config.dependencies, config.holidays, config.status_colors,
-                     changes, snapshots, icon_images, epic_icon_url, epics_info, roadmap_epics, epic_order)
+                     changes, snapshots, icon_images, epic_icon_url, epics_info, roadmap_epics, epic_order,
+                     config.visuals)
 
 
 def run_velocity(config_path, weeks):

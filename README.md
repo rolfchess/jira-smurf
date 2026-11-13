@@ -110,6 +110,7 @@ example.
 | `days_off`               | This is set per team member. It is a list of days off, for example `["2026-12-10", "2026-12-18 to 2027-01-01"]`. A range includes both days. No work is planned on those days. |
 | `[statuses]`             | Progress in percent for each Jira status. A story at 100 is done.                                                                                                              |
 | `[status_colors]`        | This sets a row background color for each Jira status, for example `"Blocked" = "#ffcccc"`.                                                                                    |
+| `[visuals]`              | This section is optional, and so is each setting in it. `past_due_blink = false` stops the blinking of the outline of a story or epic that ends after its due date. The outline then stays, without blinking. `past_due_color` is the CSS color of that outline, red (`"#d62728"`) by default. |
 | `[[badges]]`             | This setting is optional. Each `[[badges]]` table marks the epics where a Jira field has a value, for example a "Paid Feature" checkbox. `field` is the Jira field ID, such as `"customfield_10410"`. `label` is the text on the badge; without it, the badge shows the values of the field. `color` is a CSS color, amber (`"#d9a520"`) by default. `stripe = true` also draws a stripe in that color on the left of the epic row; an epic with several such badges gets their stripes side by side. A field set to "No", "False" or 0, such as a Yes/No select or a number field, counts as not set. `values`, such as `["Yes", "Partly"]`, gives the badge only for those values of the field (not case-sensitive). A cascading select shows as `Parent > Child`, and its parent alone also matches `values`. Only epic rows get badges, not their stories. |
 | `[epics.KEY]`            | Plan all stories of this epic.                                                                                                                                                 |
 | `[stories.KEY]`          | Plan this story. `depends_on = ["KEY"]` makes it start after the listed stories finish.                                                                                        |
@@ -180,7 +181,7 @@ support request, 🧹 technical debt and 📄 any other type. In the day view, w
 have a gray background. When a story or epic has a due date in Jira, the chart shows a red diamond
 on its row. The diamond is at the end of the due date. The bar of the epic will grow past the due
 date according to the planned stories. A story or epic that is not done and ends after its due date
-has a blinking red outline. When you print the chart or save it as PDF, the bars and row
+has a blinking red outline. Change it in `[visuals]`. When you print the chart or save it as PDF, the bars and row
 backgrounds keep their colors.
 
 ### Changes and trend

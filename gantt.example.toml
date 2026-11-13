@@ -78,6 +78,11 @@ auto_assign = false
 # This setting is optional. Stories with one of these Jira statuses get this background color on their row.
 "Blocked" = "#ffcccc"
 
+[visuals]
+# This section is optional. Each setting in it is optional and has a default.
+past_due_blink = true         # a story or epic that ends after its due date has a blinking outline; false keeps it still
+past_due_color = "#d62728"    # a CSS color for that outline, red by default
+
 # This setting is optional. Each [[badges]] table puts a badge before the name of every epic
 # where a Jira field has a value, for example a "Paid Feature" checkbox.
 # Field IDs differ per Jira site. Find the ID under Jira settings → Issues → Custom fields
