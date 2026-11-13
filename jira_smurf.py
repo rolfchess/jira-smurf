@@ -241,6 +241,34 @@ def parse_dates(setting, values, path):
     return result
 
 
+def parse_periods(name, values, path):
+    """Return the in_team periods of a team member as a list of (first day, last day), or None.
+
+    Each entry is "YYYY-MM-DD to YYYY-MM-DD". Either side may be empty, which leaves the period
+    open on that side. None means the member has no in_team setting.
+    """
+    if values is None:
+        return None
+    if not isinstance(values, list) or not values:
+        print(f"Error: 'in_team' for team member '{name}' in {path} must be a list of periods", file=sys.stderr)
+        sys.exit(1)
+    periods = []
+    for value in values:
+        parts = value.split("to") if isinstance(value, str) else []
+        try:
+            if len(parts) != 2:
+                raise ValueError
+            first, last = (date.fromisoformat(part.strip()) if part.strip() else None for part in parts)
+            if (first is None and last is None) or (first and last and last < first):
+                raise ValueError
+        except ValueError:
+            print(f"Error: '{value}' in 'in_team' for team member '{name}' must be "
+                  f"\"YYYY-MM-DD to YYYY-MM-DD\", \"YYYY-MM-DD to\" or \"to YYYY-MM-DD\"", file=sys.stderr)
+            sys.exit(1)
+        periods.append((first, last))
+    return periods
+
+
 def load_gantt_config(path="gantt.toml"):
     """Parse and validate gantt.toml config file."""
     try:
@@ -288,6 +316,7 @@ def load_gantt_config(path="gantt.toml"):
             sys.exit(1)
         days_off = parse_dates(f"'days_off' for team member '{name}'", avail.get("days_off", []), path)
         avail["days_off"] = days_off | holidays
+        avail["in_team"] = parse_periods(name, avail.get("in_team"), path)
         if auto_assign and not has_working_hours(avail):
             print(f"Error: team member '{name}' has no working hours configured. "
                   f"Add hours or set auto_assign = false", file=sys.stderr)
@@ -903,9 +932,25 @@ def resolve_epic_for_issue(issue, epic_cache):
 DAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
 
+def is_in_team(d, availability):
+    """Return True if date d is in one of the in_team periods of this member, or if there are none."""
+    periods = availability.get("in_team")
+    if periods is None:
+        return True
+    return any((first is None or first <= d) and (last is None or d <= last) for first, last in periods)
+
+
+def last_team_day(availability):
+    """Return the last day of the last in_team period of this member, or None if there is no last day."""
+    periods = availability.get("in_team")
+    if not periods or any(last is None for _, last in periods):
+        return None
+    return max(last for _, last in periods)
+
+
 def hours_on(d, availability):
-    """Return the hours this member works on date d. A day off has 0 hours."""
-    if d in availability.get("days_off", ()):
+    """Return the hours this member works on date d. A day off, or a day outside the team, has 0 hours."""
+    if d in availability.get("days_off", ()) or not is_in_team(d, availability):
         return 0
     return availability.get(DAY_KEYS[d.weekday()], 0)
 
@@ -921,10 +966,13 @@ def hours_worked(start, end, availability):
 
 
 def next_working_day(d, availability):
-    """Advance to the next day where this member has hours > 0."""
-    while hours_on(d, availability) <= 0:
+    """Return the first day from d on where this member has hours > 0, or None if there is no such day."""
+    last = last_team_day(availability)
+    while last is None or d <= last:
+        if hours_on(d, availability) > 0:
+            return d
         d += timedelta(days=1)
-    return d
+    return None
 
 
 def has_working_hours(availability):
@@ -932,10 +980,47 @@ def has_working_hours(availability):
     return sum(availability.get(d, 0) for d in ("mon", "tue", "wed", "thu", "fri")) > 0
 
 
-def get_earliest_available_member(member_states, team):
-    """Return the name of the auto-assign member who becomes free earliest."""
-    candidates = [name for name in member_states if team[name].get("auto_assign", True)]
-    return min(candidates, key=lambda name: member_states[name])
+def plan_work(first_day, availability, hours):
+    """Plan hours of work for one person from first_day on.
+
+    Returns (start, last day, day after the last day, hours left), or None if the person has no
+    working day left. Hours left is above 0 when the person leaves the team before the work is
+    done; the plan then ends on their last working day.
+    """
+    start = next_working_day(first_day, availability)
+    if start is None:
+        return None
+    end = start
+    remaining = hours
+    day = start
+    while remaining > 0:
+        day = next_working_day(day, availability)
+        if day is None:
+            break
+        remaining -= hours_on(day, availability)
+        end = day
+        day += timedelta(days=1)
+    return start, end, end + timedelta(days=1), max(remaining, 0)
+
+
+def pick_member(member_states, team, earliest, hours):
+    """Return (name, plan) of the auto-assign member who finishes the work first.
+
+    member_states has the first free day of each member. A member who can finish the work wins
+    over a member who leaves the team before it is done. If nobody can finish it, the member with
+    the fewest hours left wins.
+    """
+    plans = {}
+    for name, free_from in member_states.items():
+        if team[name].get("auto_assign", True):
+            plan = plan_work(max(free_from, earliest), team[name], hours)
+            if plan is not None:
+                plans[name] = plan
+    if not plans:
+        print("Error: no team member with auto_assign has working days left in the plan", file=sys.stderr)
+        sys.exit(1)
+    name = min(plans, key=lambda n: (plans[n][3], plans[n][1], plans[n][0]))
+    return name, plans[name]
 
 
 def topological_sort(keys, dependencies):
@@ -1025,10 +1110,12 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
         team[name] = dict(standard_week, auto_assign=False)
 
     # member_states tracks the next available date per member
-    member_states = {}
+    member_states = {}  # {name: first day the member is free}, only for members with working days left
     for name in team:
         if has_working_hours(team[name]):
-            member_states[name] = next_working_day(config.start_date, team[name])
+            first_day = next_working_day(config.start_date, team[name])
+            if first_day is not None:
+                member_states[name] = first_day
 
     scheduled = []
     story_end_dates = {}  # {story_key: end_date} for dependency resolution
@@ -1054,80 +1141,79 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
         # Scale down remaining hours by progress (done stories keep full estimate)
         hours = total_hours if progress >= 1.0 else total_hours * (1.0 - progress)
 
-        # Determine who works on this story
-        auto_assigned = False
-        if assignee_name in member_states:
-            member = assignee_name
-        else:
-            action = "auto-assigning" if config.auto_assign else "planning under 'Unassigned'"
-            if assignee_name != "Unassigned":
-                print(f"Warning: assignee '{assignee_name}' for {story_key} has no working hours, {action}", file=sys.stderr)
-            if config.auto_assign:
-                member = get_earliest_available_member(member_states, team)
-                auto_assigned = True
-            else:
-                member = "Unassigned"
-
-        avail = team[member]
-        cursor = member_states[member]
-
         # A story that started in the implementation status has already used part of its estimate.
         # It has what is left of the estimate after the hours worked in that status or a later one,
         # or what its status says is left if that is less. Over the estimate, only its status says
         # what is left. The days it was parked in an earlier status don't count as worked.
+        # The hours worked are counted on the week of the Jira assignee, or a standard week.
         work_start = None
         if progress < 1.0 and issue.get("_implementation_date"):
             work_start = date.fromisoformat(issue["_implementation_date"])
+            worked_week = team.get(assignee_name, standard_week)
             worked = sum(hours_worked(date.fromisoformat(start), date.fromisoformat(end) if end else date.today(),
-                                      avail)
+                                      worked_week)
                          for start, end in issue.get("_implementation_stretches", []))
             if total_hours - worked > 0:
                 hours = min(hours, total_hours - worked)
 
+        member = None
+        auto_assigned = False
         if progress >= 1.0 and story_key in done_dates:
             # A done story is shown on the days it was worked on, from its Jira status history
             start_date, end_date = done_dates[story_key]
             cursor = end_date + timedelta(days=1)
         else:
-            # Apply dependency constraints: story cannot start before all dependencies finish
-            deps = config.dependencies.get(story_key, [])
-            if deps:
-                for dep_key in deps:
-                    if dep_key in story_end_dates:
-                        dep_end = story_end_dates[dep_key]
-                        if dep_end > cursor:
-                            cursor = dep_end
-                    elif dep_key not in story_data:
-                        print(f"Warning: dependency {dep_key} for {story_key} not in scheduled set, ignoring", file=sys.stderr)
-
-            # Non-done stories cannot start in the past
+            # The story starts after its dependencies are finished, and an open story not in the past
+            earliest = config.start_date
+            for dep_key in config.dependencies.get(story_key, []):
+                if dep_key in story_end_dates:
+                    earliest = max(earliest, story_end_dates[dep_key])
+                elif dep_key not in story_data:
+                    print(f"Warning: dependency {dep_key} for {story_key} not in scheduled set, ignoring", file=sys.stderr)
             if progress < 1.0:
-                today = date.today()
-                if cursor < today:
-                    cursor = today
+                earliest = max(earliest, date.today())
 
-            cursor = next_working_day(cursor, avail)
-            start_date = cursor
-            remaining = hours
-
-            if remaining <= 0:
-                # Zero-hour story: give it a 1-day bar so it's visible
-                end_date = cursor
-                cursor += timedelta(days=1)
+            if progress >= 1.0:
+                # A done story keeps its assignee from Jira and takes no time from anyone.
+                # Without Jira dates, it is placed on standard working days from the plan start.
+                plan = plan_work(earliest, standard_week, hours)
             else:
-                while remaining > 0:
-                    cursor = next_working_day(cursor, avail)
-                    remaining -= hours_on(cursor, avail)
-                    end_date = cursor
-                    cursor += timedelta(days=1)
+                # A story assigned in Jira stays with its assignee, also one outside [team].
+                # Other stories go to the auto-assign member who finishes them first, or to
+                # "Unassigned" when auto_assign is false.
+                plan = None
+                if assignee_name in member_states:
+                    member = assignee_name
+                    plan = plan_work(max(member_states[member], earliest), team[member], hours)
+                    if plan is None:
+                        member = None
+                if member is None:
+                    action = "auto-assigning" if config.auto_assign else "planning under 'Unassigned'"
+                    if assignee_name != "Unassigned":
+                        print(f"Warning: assignee '{assignee_name}' for {story_key} has no working hours left "
+                              f"in the plan, {action}", file=sys.stderr)
+                    if config.auto_assign:
+                        member, plan = pick_member(member_states, team, earliest, hours)
+                        auto_assigned = True
+                    else:
+                        member = "Unassigned"
+                        plan = plan_work(max(member_states[member], earliest), team[member], hours)
+                if plan[3] > 0:
+                    print(f"Warning: {story_key} does not fit before '{member}' leaves the team on {plan[1]}, "
+                          f"so its bar ends there", file=sys.stderr)
+            start_date, end_date, cursor, _ = plan
 
             # The days already worked show in the past
             if work_start and work_start < start_date:
                 start_date = work_start
 
-        if progress < 1.0:
-            # Only advance availability for stories that aren't done
-            member_states[member] = cursor
+        if member is not None:
+            # Only open stories take time from their member
+            free_from = next_working_day(cursor, team[member])
+            if free_from is None:
+                del member_states[member]
+            else:
+                member_states[member] = free_from
         story_end_dates[story_key] = cursor
 
         scheduled.append({
@@ -1135,7 +1221,7 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
             "title": title,
             "epic": issue.get("_epic", NO_EPIC),
             "epic_key": issue.get("_epic_key", ""),
-            "assignee": member,
+            "assignee": member or assignee_name,
             "auto_assigned": auto_assigned,  # the planner picked the member, not Jira
             "status": status,
             "sprint": sprint,
@@ -2853,11 +2939,13 @@ def run_velocity(config_path, weeks):
 
     The hours are the team hours from the configuration file, without days off and holidays.
     The points are those of stories assigned to a team member that moved to a done status.
+    A story without points counts as default_hours divided by the configured velocity.
     """
     config = load_gantt_config(config_path)
     end = date.today() - timedelta(days=date.today().weekday())  # Monday of the current week
     start = end - timedelta(weeks=weeks)
 
+    assumed_points = config.default_hours / config.velocity
     print(f"Fetching the stories finished from {start} to {end - timedelta(days=1)}...", file=sys.stderr)
     week_starts = [start + timedelta(weeks=i) for i in range(weeks)]
     points = {w: 0.0 for w in week_starts}
@@ -2873,8 +2961,8 @@ def run_velocity(config_path, weeks):
         story_points = get_story_points_numeric(fields)
         if story_points is None:
             unpointed[week] += 1
-        else:
-            points[week] += story_points
+            story_points = assumed_points
+        points[week] += story_points
 
     def team_hours(first_day):
         return sum(hours_on(first_day + timedelta(days=i), avail)
@@ -2903,9 +2991,9 @@ def run_velocity(config_path, weeks):
     else:
         print(f"No stories with story points were finished in the last {weeks} weeks.")
     if total_unpointed:
-        stories, their = ("story had", "Its") if total_unpointed == 1 else ("stories had", "Their")
-        print(f"{total_unpointed} finished {stories} no story points. {their} work is in the hours but not "
-              f"in the points, so the real hours per story point are lower than shown.")
+        stories = "story had" if total_unpointed == 1 else "stories had"
+        print(f"{total_unpointed} finished {stories} no story points. Each counts as {assumed_points:g} points: "
+              f"default_hours {config.default_hours:g} divided by velocity {config.velocity:g}.")
 
 
 def run_export(fmt):
