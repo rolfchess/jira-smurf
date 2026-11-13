@@ -741,7 +741,7 @@ def adf_text(node):
     return " ".join(adf_text(child) for child in node.get("content", []) if isinstance(child, dict))
 
 
-BADGE_TEXT_LENGTH = 30  # longer field values are cut off on the badge; the tooltip has all of it
+BADGE_TEXT_LENGTH = 30  # a badge without a label cuts off longer field values; the tooltip has all of them
 
 
 def epic_badges(fields, badges, field_names):
@@ -750,7 +750,8 @@ def epic_badges(fields, badges, field_names):
     An epic gets a badge when the field of that badge has a value: one of the 'values' of the badge,
     or without 'values' any value but "No", "False" or 0. A value "Parent > Child" of a cascading
     select also matches on its parent alone. The badge shows its label, or those values of the field
-    when it has no label.
+    when it has no label, cut off at BADGE_TEXT_LENGTH. The label is never cut off, because the
+    tooltip does not show it.
     """
     def matches(value, texts):
         return value.lower() in texts or value.split(" > ", 1)[0].lower() in texts
@@ -765,9 +766,10 @@ def epic_badges(fields, badges, field_names):
         if not values:
             continue
         name = field_names.get(badge["field"], badge["field"])
-        text = badge["label"] or ", ".join(values)
+        text = ", ".join(values)
         if len(text) > BADGE_TEXT_LENGTH:
             text = text[:BADGE_TEXT_LENGTH - 1].rstrip() + "…"
+        text = badge["label"] or text
         result.append({
             "text": text,
             "title": f"{name}: {', '.join(values)}",
