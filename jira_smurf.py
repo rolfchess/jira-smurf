@@ -448,6 +448,11 @@ def parse_badges(badges_raw, path):
             print(f"Error: 'stripe' of badge {field} must be true or false, got {stripe!r}", file=sys.stderr)
             sys.exit(1)
         values = badge.get("values", [])
+        if "values" in badge and values == []:
+            # Not "any value", which is what leaving 'values' out means
+            print(f"Error: 'values' of badge {field} is empty, so no value could give the badge. "
+                  f"List the values that give it, or leave 'values' out for any value", file=sys.stderr)
+            sys.exit(1)
         if not isinstance(values, list) or not all(isinstance(v, str) and v.strip() for v in values):
             print(f"Error: 'values' of badge {field} must be a list of texts such as [\"Yes\"], got {values!r}",
                   file=sys.stderr)
