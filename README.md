@@ -7,6 +7,8 @@ A command line tool for Jira Cloud. It can:
 - export all stories of a project as CSV or as an HTML table, grouped by epic;
 - plan a set of stories over your team and write an interactive Gantt chart.
 
+See [CHANGES.md](CHANGES.md) for the changes per week.
+
 ## Setup
 
 You need Python 3.9 or newer.
@@ -57,13 +59,14 @@ the `gantt` command. It uses `open`, so it works on macOS. If there is a virtual
 ### Refresh the chart from the browser
 
 ```bash
-./serve-gantt.sh                                # or: python jira_smurf.py serve --history plannings
+python jira_smurf.py serve --history plannings
 python jira_smurf.py serve --port 8080 --no-open
 ```
 
 `serve` builds the chart, serves it at `http://localhost:8000/` and opens it in the browser. The
 page then has a **Refresh from Jira** button: it fetches the stories again, rebuilds the chart and
-reloads the page, so you do not have to go back to the command line. Each refresh reads
+reloads the page, so you do not have to go back to the command line. A spinner shows while it
+fetches the stories. Each refresh reads
 `gantt.toml` again, so changes to it are picked up too. With `--history`, each refresh also stores
 the snapshot and the chart in that directory, like `generate-gantt.sh`. Stop the server with Ctrl+C.
 
@@ -126,13 +129,13 @@ How the planning works:
   someone who is not in `[team]` stays with that person: they get their own row, 8 hours a day
   without days off other than `holidays`, and are never given other stories. Add them to `[team]`
   to plan them with their real hours. Only stories without an assignee in Jira go to the auto-assign
-  member who finishes them first. Such a story has an `AUTO` badge after the name in the chart. With
+  member who finishes them first. In the chart, such a story has an `AUTO` badge after the name of its member, to the right of its bar. With
   `auto_assign = false`, they go to "Unassigned" instead.
 - A member who leaves the team before a story is finished does not get it, unless nobody can finish
   it. A story assigned in Jira to a member who has already left the team is planned as a story without
   an assignee.
 - A done story keeps its assignee from Jira. It does not use the hours of anyone in the team.
-- An open story has a grey badge after the name with its age: the number of days since it was
+- An open story has a grey badge to the right of its bar with its age: the number of days since it was
   created in Jira, for example `45d`. Hover over it to see the date. Done stories have no age badge.
 - With `implementation_status` set, an open story also has a badge that compares the time in
   implementation with the estimate, for example `impl 3/2d`: 3 working days in that status or a later
@@ -165,8 +168,10 @@ How the planning works:
 In the chart you can zoom, search for a story (or for an epic by its badges) and show or hide done stories. Done stories are hidden
 at first. Click a team member badge above the table to show only the stories of that member. You can
 select more than one member, and "Unassigned". The epic rows then show the points of the stories
-that are shown. The Points and Sprint columns show the story points and the number of
-the last sprint of each story. Click a bar to open the story in Jira. The buttons in the Story column header collapse or
+that are shown. The Status column shows the Jira status of each story. The Points column shows the story points in a
+green badge. The badge is orange when the story is longer in implementation than its estimate. The
+Sprint column shows the number of the last sprint of each story. Epic rows have a blue-grey
+background, and their points are in a dark badge. Click a bar to open the story in Jira. The buttons in the Story column header collapse or
 expand all epics. Each title in the Story column starts with the icon of its Jira issue type. The
 run downloads these icons from Jira and puts them in the page, so the page shows them without a Jira
 login. If an icon cannot be downloaded, the page shows an emoji instead: 📖 epic, 🔖 story, 🐛 bug,
@@ -174,7 +179,8 @@ login. If an icon cannot be downloaded, the page shows an emoji instead: 📖 ep
 support request, 🧹 technical debt and 📄 any other type. In the day view, weekends and holidays
 have a gray background. When a story or epic has a due date in Jira, the chart shows a red diamond
 on its row. The diamond is at the end of the due date. The bar of the epic will grow past the due
-date according to the planned stories.
+date according to the planned stories. When you print the chart or save it as PDF, the bars and row
+backgrounds keep their colors.
 
 ### Changes and trend
 
@@ -231,7 +237,8 @@ works, and for what your team can do to keep it steady.
   team-managed project, the epic is the parent of the story, in the `parent` field. In a
   company-managed project, the epic is in the Epic Link field, `customfield_10014`. The tool reads
   both fields, so it finds the epic of a story in both kinds of project.
-- Stories without an epic are grouped under "(No Epic)".
+- Stories without an epic are grouped under "(No Epic)". In the Gantt chart, this group is at the top
+  and has no bar.
 
 ## Tip: share the chart from Google Drive
 
