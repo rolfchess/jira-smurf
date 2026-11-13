@@ -24,6 +24,8 @@ The tool has no version numbers yet. This file lists the changes per week, newes
 - Add the optional `[visuals]` section to `gantt.toml`, with `past_due_blink` to stop the blinking
   and `past_due_color` to set the color of the outline of a story that ends after its due date.
 - Add the holidays of 2028 to `gantt.example.toml`.
+- Make the search box of the Gantt chart faster. It searches when the typing pauses, and it
+  redraws the chart once per search, not once per match.
 
 ## Week of 2026-11-02
 
