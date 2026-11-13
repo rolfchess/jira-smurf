@@ -26,7 +26,8 @@ The chart's **Show changes since …** checkbox controls comparison marks:
 - tooltips show estimate changes;
 - thin gray bars show baseline dates;
 - the Moved column shows the change in working days;
-- yellow outlines identify work that should already have finished;
+- yellow outlines identify work that should already have finished (set the color with
+  `behind_baseline_color` in `[visuals]`);
 - a final gray group lists open stories removed from the current plan.
 
 The summary below the chart attributes changes in the plan end to new stories, changed estimates,
