@@ -4,6 +4,9 @@ The chart supports zooming, searching, and filtering by team member. Select seve
 “Unassigned”—to combine their work. Done stories are hidden initially; use the toolbar to show them.
 The Story-column buttons collapse or expand every epic.
 
+The Day, Week, Month and Quarter buttons set the scale of the chart. A filter keeps that scale. Until
+you pick a scale, and after Fit All, a filter fits the chart to the stories that are shown.
+
 Click a bar to open its Jira issue. Issue icons are embedded in the page so they work without a Jira
 login; an emoji is used when an icon cannot be downloaded.
 

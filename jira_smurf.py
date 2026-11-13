@@ -2166,11 +2166,11 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   <button id="refresh-button" hidden onclick="refreshChart()" title="Fetch the stories from Jira again and redraw the chart">Refresh from Jira</button>
   <span id="refresh-status"></span>
   <div class="zoom-buttons">
-    <button onclick="setZoom('day')">Day</button>
-    <button onclick="setZoom('week')">Week</button>
-    <button onclick="setZoom('month')">Month</button>
-    <button onclick="setZoom('quarter')">Quarter</button>
-    <button onclick="zoomToFit()">Fit All</button>
+    <button onclick="chooseZoom('day')">Day</button>
+    <button onclick="chooseZoom('week')">Week</button>
+    <button onclick="chooseZoom('month')">Month</button>
+    <button onclick="chooseZoom('quarter')">Quarter</button>
+    <button onclick="chooseZoom(null)">Fit All</button>
   </div>
   <label id="show-done-wrap"><input type="checkbox" id="show-done" onchange="applyFilters()"> Show done stories</label>
   {changes_toggle}
@@ -2348,6 +2348,12 @@ function setZoom(level) {{
     b.classList.toggle("active", b.textContent.toLowerCase() === level);
   }});
 }}
+var chosenZoom = null;  // the level picked with a zoom button, or null to fit the chart to the shown stories
+function chooseZoom(level) {{
+  chosenZoom = level;
+  if (level) setZoom(level);
+  else zoomToFit();
+}}
 var hideDone = false;
 var selectedMembers = {{}};  // {{assignee: true}} for the team members whose stories are shown; empty shows all
 var memberCounts = {{}};  // {{assignee: count element}} in the badges
@@ -2465,8 +2471,28 @@ function applyFilters() {{
     task.points = totals.points;
   }});
   updateMemberCounts();
-  zoomToFit();
+  showShownDates();
+}}
+// Show the dates of the shown stories at the chosen zoom level, or fit them when no level is chosen
+function showShownDates() {{
+  if (!chosenZoom) {{
+    zoomToFit();
+    gantt.render();
+    return;
+  }}
+  var project = shownDates();
+  if (!project.start_date || !project.end_date) {{
+    gantt.render();
+    return;
+  }}
+  // Keep the same day at the left edge of the timeline, if it is still in the range
+  var leftDate = gantt.dateFromPos(gantt.getScrollState().x);
+  gantt.config.start_date = project.start_date;
+  gantt.config.end_date = gantt.date.add(project.end_date, 1, "day");
+  setZoom(chosenZoom);
   gantt.render();
+  var inRange = leftDate >= gantt.config.start_date && leftDate < gantt.config.end_date;
+  gantt.scrollTo(inRange ? gantt.posFromDate(leftDate) : 0, null);
 }}
 function shownDates() {{
   var start = null, end = null;
