@@ -17,7 +17,7 @@ import sys
 import threading
 import webbrowser
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 try:
     import tomllib
@@ -739,11 +739,23 @@ def adf_text(node):
 
     The text nodes inside a block are joined without a space: ADF splits a word such as
     "Pre" + bold "mium" into two text nodes wherever the formatting changes.
+    Mentions, emoji, statuses, dates and links keep their text in their attrs.
     """
-    if node.get("type") == "text":
+    kind, attrs = node.get("type"), node.get("attrs") or {}
+    if kind == "text":
         return node.get("text", "")
-    if node.get("type") == "hardBreak":
+    if kind == "hardBreak":
         return " "
+    if kind in ("mention", "emoji", "status"):
+        return str(attrs.get("text") or attrs.get("shortName") or "")
+    if kind == "date":
+        try:
+            # The timestamp is midnight UTC of the date
+            return datetime.fromtimestamp(int(attrs.get("timestamp")) / 1000, timezone.utc).date().isoformat()
+        except (TypeError, ValueError, OverflowError, OSError):
+            return ""
+    if kind in ("inlineCard", "blockCard", "embedCard"):
+        return f" {attrs.get('url', '')} "
     inner = "".join(adf_text(child) for child in node.get("content", []) if isinstance(child, dict))
     # A block such as a paragraph, heading or list item has content; a space keeps it apart from the next
     return f" {inner} " if "content" in node else inner
