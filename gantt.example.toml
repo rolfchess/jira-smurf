@@ -7,8 +7,11 @@ velocity = 8.0                  # hours per story point
 include_open_sprints = false    # also add all stories in the active sprint
 include_future_sprints = false  # also add all stories in future sprints
 work_starts_at = "In Progress"  # a done story's bar starts at this status or a later one
+implementation_status = "Implementation"  # open stories show the days spent in this status or later
 use_backlog_order = true        # plan stories in Jira backlog order, not in the order of this file
 dependency_links = ["Blocks"]   # Jira link types that make a story wait for another
+auto_assign = true              # false plans stories without a Jira assignee under "Unassigned"
+exclude = []                    # stories to leave out: a project key such as "DTICARCH" or a full key such as "ACME-123"
 
 # These are days off for the whole team, written as YYYY-MM-DD.
 holidays = [
@@ -66,6 +69,7 @@ auto_assign = false
 "Refinement" = 1
 "Ready for Development" = 5
 "In Progress" = 20
+"Implementation" = 40
 "Blocked" = 0
 "Code Review" = 80
 "Done" = 100
@@ -73,6 +77,17 @@ auto_assign = false
 [status_colors]
 # This setting is optional. Stories with one of these Jira statuses get this background color on their row.
 "Blocked" = "#ffcccc"
+
+# This setting is optional. Each [[badges]] table puts a badge before the name of every epic
+# where a Jira field has a value, for example a "Paid Feature" checkbox.
+# Field IDs differ per Jira site. Find the ID under Jira settings → Issues → Custom fields
+# (open the field; the URL has id=10410, so the ID is customfield_10410), or at /rest/api/3/field.
+[[badges]]
+field = "customfield_10410"  # the Jira field ID
+label = "Paid"               # optional: the text on the badge; without it the badge shows the field's values
+color = "#d9a520"            # optional: a CSS color, amber by default
+stripe = true                # optional: also a stripe in this color on the left of the epic row
+values = ["Yes"]             # optional: only these field values give the badge; without it any value but "No", "False" or 0
 
 [epics]
 # All stories of these epics are planned, in this order.

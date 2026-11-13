@@ -8,12 +8,16 @@ import csv
 import glob
 import heapq
 import html
+import http.server
+import io
 import json
 import os
 import re
 import sys
+import threading
+import webbrowser
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 try:
     import tomllib
@@ -76,7 +80,7 @@ def jira_get(path, params=None):
 def fetch_stories():
     """Fetch all stories for the project, paginating through results."""
     jql = f"project = {JIRA_PROJECT} AND issuetype = Story ORDER BY key ASC"
-    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10028"
+    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10016"
     issues = []
     next_page_token = None
 
@@ -97,6 +101,10 @@ def fetch_stories():
             break
 
     return issues
+
+
+# Name of the group of stories that do not belong to an epic
+NO_EPIC = "(No Epic)"
 
 
 def resolve_epic_name(issue):
@@ -121,12 +129,12 @@ def resolve_epic_name(issue):
         except requests.HTTPError:
             return epic_key  # fall back to key if we can't fetch it
 
-    return "(No Epic)"
+    return NO_EPIC
 
 
 def get_story_points(fields):
     """Extract story points, trying the configured field and common defaults."""
-    for field_name in (STORY_POINTS_FIELD, "story_points", "customfield_10028"):
+    for field_name in (STORY_POINTS_FIELD, "story_points", "customfield_10016"):
         val = fields.get(field_name)
         if val is not None:
             return str(val).replace(".", ",")
@@ -134,12 +142,21 @@ def get_story_points(fields):
 
 
 def get_sprint(fields):
-    """Extract the most recent sprint name."""
+    """Return the name of the active sprint of a story, or else of its latest sprint, or ""."""
     sprints = fields.get(SPRINT_FIELD)
-    if sprints:
-        # Sprint field is a list of sprint objects; take the last (most recent) one
-        return sprints[-1].get("name", "") if isinstance(sprints, list) else ""
-    return ""
+    if not sprints or not isinstance(sprints, list):
+        return ""
+    # Jira does not keep this list in sprint order, so pick by state, then by date
+    state_order = {"active": 2, "future": 1}
+    latest = max(sprints, key=lambda s: (state_order.get(s.get("state"), 0),
+                                         s.get("endDate") or s.get("startDate") or "", s.get("id", 0)))
+    return latest.get("name", "")
+
+
+def in_active_sprint(fields):
+    """Return True when the story is in a sprint that is running now."""
+    sprints = fields.get(SPRINT_FIELD)
+    return isinstance(sprints, list) and any(s.get("state") == "active" for s in sprints)
 
 
 def get_assignee(fields):
@@ -151,7 +168,7 @@ def get_assignee(fields):
 
 def get_story_points_numeric(fields):
     """Extract story points as a float, or None if not set."""
-    for field_name in (STORY_POINTS_FIELD, "story_points", "customfield_10028"):
+    for field_name in (STORY_POINTS_FIELD, "story_points", "customfield_10016"):
         val = fields.get(field_name)
         if val is not None:
             try:
@@ -178,6 +195,21 @@ class GanttConfig:
     work_start_progress: float  # progress of the status where work on a story starts, 0 if not set
     use_backlog_order: bool  # schedule stories in Jira backlog order instead of the order of the configuration file
     dependency_links: list  # lowercase names of Jira link types that make a story wait for another
+    auto_assign: bool  # give stories without a team member to the team; if False, plan them under "Unassigned"
+    implementation_status: str  # status where open stories show their days of work in a badge, "" if not set
+    exclude: list  # [key or project key, ...] — uppercase; stories that match are left out of the chart
+    badges: list  # [{field, label, color, stripe}, ...] — badges on epic rows where a Jira field is set
+
+
+def is_excluded(key, exclude):
+    """Return True if the issue key matches an entry of exclude.
+
+    An entry with a number, such as "ACME-123", matches that one key. An entry without one,
+    such as "ACME", matches every key of that project.
+    """
+    key = key.upper()
+    project = key.rsplit("-", 1)[0]
+    return any(key == entry or project == entry for entry in exclude)
 
 
 def parse_dates(setting, values, path):
@@ -266,6 +298,12 @@ def load_gantt_config(path="gantt.toml"):
     # Holidays are days off for the whole team
     holidays = parse_dates("'holidays'", raw.get("holidays", []), path)
 
+    # Without auto-assign, stories without a team member are not given to the team
+    auto_assign_team = raw.get("auto_assign", True)
+    if not isinstance(auto_assign_team, bool):
+        print(f"Error: 'auto_assign' must be true or false, got {auto_assign_team!r}", file=sys.stderr)
+        sys.exit(1)
+
     # Validate team
     team = raw.get("team", {})
     if not team:
@@ -283,7 +321,7 @@ def load_gantt_config(path="gantt.toml"):
             print(f"Error: team member '{name}' has no working hours configured. "
                   f"Add hours or set auto_assign = false", file=sys.stderr)
             sys.exit(1)
-    if not any(avail.get("auto_assign", True) for avail in team.values()):
+    if auto_assign_team and not any(avail.get("auto_assign", True) for avail in team.values()):
         print(f"Error: no team member in {path} has auto_assign enabled", file=sys.stderr)
         sys.exit(1)
 
@@ -314,13 +352,21 @@ def load_gantt_config(path="gantt.toml"):
             sys.exit(1)
         work_start_progress = statuses[work_starts_at.lower()]
 
+    # This is the optional status where open stories show their days of work in a badge
+    implementation_status = raw.get("implementation_status")
+    if implementation_status is not None:
+        if not isinstance(implementation_status, str) or implementation_status.lower() not in statuses:
+            print(f"Error: 'implementation_status' must be a status from [statuses], got {implementation_status!r}",
+                  file=sys.stderr)
+            sys.exit(1)
+
     # Parse optional [status_colors] section — maps status name to a row background color
     status_colors_raw = raw.get("status_colors", {})
     if not isinstance(status_colors_raw, dict):
         print(f"Error: [status_colors] in {path} must be a table", file=sys.stderr)
         sys.exit(1)
     for name, color in status_colors_raw.items():
-        if not isinstance(color, str) or not re.fullmatch(r"[#\w(),.%\s]+", color):
+        if not is_css_color(color):
             print(f"Error: color for status '{name}' must be a CSS color such as \"#ffcccc\", got {color!r}",
                   file=sys.stderr)
             sys.exit(1)
@@ -355,6 +401,14 @@ def load_gantt_config(path="gantt.toml"):
             print(f"Error: '{name}' must be true or false, got {val!r}", file=sys.stderr)
             sys.exit(1)
 
+    # Stories or whole projects to leave out of the chart, such as issues of another team
+    exclude = raw.get("exclude", [])
+    if not isinstance(exclude, list) or not all(isinstance(entry, str) and entry.strip() for entry in exclude):
+        print(f"Error: 'exclude' must be a list of issue keys or project keys, got {exclude!r}", file=sys.stderr)
+        sys.exit(1)
+
+    badges = parse_badges(raw.get("badges", []), path)
+
     if not epic_keys and not story_keys and not include_open_sprints and not include_future_sprints:
         print(f"Error: [epics] and [stories] are missing or empty in {path}, "
               f"and no sprints are included", file=sys.stderr)
@@ -370,7 +424,71 @@ def load_gantt_config(path="gantt.toml"):
                        status_colors=status_colors,
                        work_start_progress=work_start_progress,
                        use_backlog_order=use_backlog_order,
-                       dependency_links=[name.lower() for name in dependency_links])
+                       dependency_links=[name.lower() for name in dependency_links],
+                       auto_assign=auto_assign_team,
+                       implementation_status=implementation_status or "",
+                       exclude=[entry.strip().upper() for entry in exclude],
+                       badges=badges)
+
+
+DEFAULT_BADGE_COLOR = "#d9a520"  # amber, so a badge does not look like the orange "over the estimate" badge
+# Without 'values', a badge ignores these field values, so a Yes/No select set to "No"
+# or a number field set to 0 gives no badge
+NO_BADGE_VALUES = {"no", "false", "0"}
+
+
+def is_css_color(value):
+    """Return True if value looks like a CSS color, such as "#ffcccc" or "rgb(1, 2, 3)"."""
+    return isinstance(value, str) and re.fullmatch(r"[#\w(),.%\s]+", value) is not None
+
+
+def parse_badges(badges_raw, path):
+    """Return the [[badges]] of the configuration as [{field, label, color, stripe, values}, ...].
+
+    Each badge marks the epic rows where a Jira field, such as a "Paid Feature" checkbox, has a value.
+    values are the lowercase field values that give the badge, or [] for any value but "No", "False" or 0.
+    """
+    if not isinstance(badges_raw, list) or not all(isinstance(b, dict) for b in badges_raw):
+        print(f"Error: badges in {path} must be a list of [[badges]] tables", file=sys.stderr)
+        sys.exit(1)
+    badges = []
+    for i, badge in enumerate(badges_raw, 1):
+        unknown = set(badge) - {"field", "label", "color", "stripe", "values"}
+        if unknown:
+            print(f"Error: [[badges]] number {i} in {path} has unknown settings: {', '.join(sorted(unknown))}",
+                  file=sys.stderr)
+            sys.exit(1)
+        field = badge.get("field")
+        if not isinstance(field, str) or not re.fullmatch(r"\w+", field.strip()):
+            print(f"Error: [[badges]] number {i} in {path} needs a field ID such as \"customfield_10410\", "
+                  f"got {field!r}", file=sys.stderr)
+            sys.exit(1)
+        label = badge.get("label", "")
+        if not isinstance(label, str):
+            print(f"Error: 'label' of badge {field} must be text, got {label!r}", file=sys.stderr)
+            sys.exit(1)
+        color = badge.get("color", DEFAULT_BADGE_COLOR)
+        if not is_css_color(color):
+            print(f"Error: 'color' of badge {field} must be a CSS color such as \"#d9a520\", got {color!r}",
+                  file=sys.stderr)
+            sys.exit(1)
+        stripe = badge.get("stripe", False)
+        if not isinstance(stripe, bool):
+            print(f"Error: 'stripe' of badge {field} must be true or false, got {stripe!r}", file=sys.stderr)
+            sys.exit(1)
+        values = badge.get("values", [])
+        if "values" in badge and values == []:
+            # Not "any value", which is what leaving 'values' out means
+            print(f"Error: 'values' of badge {field} is empty, so no value could give the badge. "
+                  f"List the values that give it, or leave 'values' out for any value", file=sys.stderr)
+            sys.exit(1)
+        if not isinstance(values, list) or not all(isinstance(v, str) and v.strip() for v in values):
+            print(f"Error: 'values' of badge {field} must be a list of texts such as [\"Yes\"], got {values!r}",
+                  file=sys.stderr)
+            sys.exit(1)
+        badges.append({"field": field.strip(), "label": label.strip(), "color": color, "stripe": stripe,
+                       "values": [v.strip().lower() for v in values]})
+    return badges
 
 
 def fetch_stories_for_epic(epic_key):
@@ -379,7 +497,7 @@ def fetch_stories_for_epic(epic_key):
     Tries next-gen (parent) first, falls back to classic (Epic Link).
     Returns list of issue dicts.
     """
-    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10028,duedate,issuetype,issuelinks"
+    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10016,duedate,created,issuetype,issuelinks"
 
     for jql in (
         f"parent = {epic_key} AND issuetype = Story ORDER BY key ASC",
@@ -418,7 +536,7 @@ def fetch_stories_by_keys(story_keys, warn_missing=True):
     """
     keys_str = ", ".join(story_keys)
     jql = f"key in ({keys_str})"
-    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10028,duedate,issuetype,issuelinks"
+    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10016,duedate,created,issuetype,issuelinks"
     issues = []
     next_page_token = None
 
@@ -469,7 +587,7 @@ def fetch_finished_stories(start, end):
     """Fetch the stories of the project that moved to a done status from start up to end (not included)."""
     jql = (f'project = {JIRA_PROJECT} AND issuetype = Story AND statusCategory = Done '
            f'AND statusCategoryChangedDate >= "{start}" AND statusCategoryChangedDate < "{end}" ORDER BY key ASC')
-    fields = f"summary,assignee,statuscategorychangedate,{STORY_POINTS_FIELD},customfield_10028"
+    fields = f"summary,assignee,statuscategorychangedate,{STORY_POINTS_FIELD},customfield_10016"
     issues = []
     next_page_token = None
     while True:
@@ -493,7 +611,7 @@ def fetch_sprint_stories(include_open, include_future):
         sprint_functions.append("futureSprints()")
     sprint_clause = " OR ".join(f"sprint in {f}" for f in sprint_functions)
     jql = f"project = {JIRA_PROJECT} AND issuetype = Story AND ({sprint_clause}) ORDER BY key ASC"
-    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10028,duedate,issuetype,issuelinks"
+    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10016,duedate,created,issuetype,issuelinks"
     issues = []
     next_page_token = None
 
@@ -554,6 +672,31 @@ def work_dates(status_changes, statuses, work_start_progress=0.0):
     return start, end
 
 
+def implementation_stretches(status_changes, status, statuses):
+    """Return the stretches a story spent in the given status (any case) or a later one.
+
+    The result is a list of (first day, day it moved back) pairs, oldest first. The day it
+    moved back is None for a stretch that is still going on. A later status is one with more
+    progress in statuses that is not done. So a story that goes back from Code Review for
+    rework stays in its stretch, but the days a story was parked, for example back in Ready
+    for Development, are left out. Before the first change the story counts as in an earlier status.
+    """
+    progress = statuses.get(status.lower(), 0)
+    stretches = []
+    start = None
+    for day, name in status_changes:
+        in_work = progress <= statuses.get(name.lower(), 0) < 1.0
+        if in_work and start is None:
+            start = day
+        elif not in_work and start is not None:
+            if day > start:  # a move back on the same day leaves no stretch
+                stretches.append((start, day))
+            start = None
+    if start is not None:
+        stretches.append((start, None))
+    return stretches
+
+
 def link_dependencies(issues, link_types):
     """Return {story key: {key of a story it waits for, ...}} from the Jira links between the given issues.
 
@@ -580,24 +723,133 @@ def link_dependencies(issues, link_types):
     return dependencies
 
 
-def find_start_date_field():
-    """Return the id of the Jira field named "Start date", or None if there is none."""
+def fetch_jira_fields():
+    """Return the list of all Jira fields, or [] with a warning if Jira does not give it."""
     try:
-        fields = jira_get("field")
-    except requests.RequestException:
-        return None
-    for field in fields:
+        return jira_get("field")
+    except requests.RequestException as e:
+        print(f"Warning: could not read the list of Jira fields ({e}), so epics get no start date, "
+              f"badge fields are not checked and badge tooltips show field IDs", file=sys.stderr)
+        return []
+
+
+def find_start_date_field(jira_fields):
+    """Return the id of the Jira field named "Start date", or None if there is none."""
+    for field in jira_fields:
         if field.get("name", "").lower() == "start date" and (field.get("schema") or {}).get("type") == "date":
             return field["id"]
     return None
 
 
-def fetch_epics(epic_keys, start_date_field=None):
-    """Return {epic key: {key, name, start, due}} for the given epics.
+def field_values(value):
+    """Return the value of a Jira field as a list of (text, parent), or [] when the field is empty.
+
+    This handles text, numbers, checkboxes and select lists (options with a "value"),
+    cascading selects (an option with a "child" option, as "Parent > Child"),
+    users (with a "displayName"), other objects with a "name", and rich text (an ADF document).
+    parent is the parent option of a cascading select, and None for any other value.
+    """
+    if value is None or value is False or value == "":
+        return []
+    if isinstance(value, list):
+        return [item_value for item in value for item_value in field_values(item)]
+    if isinstance(value, dict) and value.get("type") == "doc":
+        text = " ".join(adf_text(value).split())
+        return [(text, None)] if text else []
+    if isinstance(value, dict):
+        for key in ("value", "displayName", "name"):
+            # An option with the value 0 is that value, the same as a number field holding 0
+            own = field_values(value.get(key)) if not isinstance(value.get(key), (dict, list)) else []
+            if own:
+                child = field_values(value.get("child"))
+                parent = own[0][0]
+                return [(f"{parent} > {child[0][0]}", parent) if child else (parent, None)]
+        return []
+    if value is True:
+        return [("Yes", None)]
+    if isinstance(value, float) and value.is_integer():
+        return [(str(int(value)), None)]  # Jira gives numbers as floats; show 5, not 5.0
+    return [(str(value), None)]
+
+
+def adf_text(node):
+    """Return the text in a rich text (ADF) node of Jira, with a space between its blocks.
+
+    The text nodes inside a block are joined without a space: ADF splits a word such as
+    "Pre" + bold "mium" into two text nodes wherever the formatting changes.
+    Mentions, emoji, statuses, dates and links keep their text in their attrs.
+    """
+    kind, attrs = node.get("type"), node.get("attrs") or {}
+    if kind == "text":
+        return node.get("text", "")
+    if kind == "hardBreak":
+        return " "
+    if kind in ("mention", "emoji", "status"):
+        return str(attrs.get("text") or attrs.get("shortName") or "")
+    if kind == "date":
+        try:
+            # The timestamp is midnight UTC of the date
+            return datetime.fromtimestamp(int(attrs.get("timestamp")) / 1000, timezone.utc).date().isoformat()
+        except (TypeError, ValueError, OverflowError, OSError):
+            return ""
+    if kind in ("inlineCard", "blockCard", "embedCard"):
+        return f" {attrs.get('url', '')} "
+    inner = "".join(adf_text(child) for child in node.get("content", []) if isinstance(child, dict))
+    # A block such as a paragraph, heading or list item has content; a space keeps it apart from the next
+    return f" {inner} " if "content" in node else inner
+
+
+BADGE_TEXT_LENGTH = 30  # a badge without a label cuts off longer field values; the tooltip has all of them
+
+
+def epic_badges(fields, badges, field_names):
+    """Return the badges for an epic with these Jira fields, as [{text, title, search, color, stripe}, ...].
+
+    search is the label and the field values in full, for the search box.
+
+    An epic gets a badge when the field of that badge has a value: one of the 'values' of the badge,
+    or without 'values' any value but "No", "False" or 0. A value "Parent > Child" of a cascading
+    select also matches on its parent alone. The badge shows its label, or those values of the field
+    when it has no label, cut off at BADGE_TEXT_LENGTH. The label is never cut off, because the
+    tooltip does not show it.
+    """
+    def matches(value, texts):
+        text, parent = value
+        return text.lower() in texts or (parent is not None and parent.lower() in texts)
+
+    result = []
+    for badge in badges:
+        values = field_values(fields.get(badge["field"]))
+        if badge["values"]:
+            values = [v for v in values if matches(v, badge["values"])]
+        else:
+            values = [v for v in values if not matches(v, NO_BADGE_VALUES)]
+        values = [text for text, _ in values]
+        if not values:
+            continue
+        name = field_names.get(badge["field"], badge["field"])
+        text = ", ".join(values)
+        if len(text) > BADGE_TEXT_LENGTH:
+            text = text[:BADGE_TEXT_LENGTH - 1].rstrip() + "…"
+        text = badge["label"] or text
+        result.append({
+            "text": text,
+            "title": f"{name}: {', '.join(values)}",
+            "search": f"{badge['label']} {', '.join(values)}".strip(),
+            "color": badge["color"],
+            "stripe": badge["stripe"],
+        })
+    return result
+
+
+def fetch_epics(epic_keys, start_date_field=None, badges=(), field_names=None):
+    """Return {epic key: {key, name, start, due, badges}} for the given epics.
 
     start and due are YYYY-MM-DD strings, or "" when the epic has no such date in Jira.
+    badges is the list from epic_badges for the [[badges]] of the configuration.
     """
-    fields = "summary,duedate" + (f",{start_date_field}" if start_date_field else "")
+    fields = ",".join(["summary", "duedate"] + ([start_date_field] if start_date_field else [])
+                      + [badge["field"] for badge in badges])
     jql = f"key in ({', '.join(epic_keys)})"
     epics = {}
     next_page_token = None
@@ -613,6 +865,7 @@ def fetch_epics(epic_keys, start_date_field=None):
                 "name": f.get("summary") or issue["key"],
                 "start": (f.get(start_date_field) or "")[:10] if start_date_field else "",
                 "due": (f.get("duedate") or "")[:10],
+                "badges": epic_badges(f, badges, field_names or {}),
             }
         next_page_token = data.get("nextPageToken")
         if not next_page_token:
@@ -702,6 +955,16 @@ def hours_on(d, availability):
     return availability.get(DAY_KEYS[d.weekday()], 0)
 
 
+def hours_worked(start, end, availability):
+    """Return the hours this member works from start up to end (not included)."""
+    hours = 0
+    d = start
+    while d < end:
+        hours += hours_on(d, availability)
+        d += timedelta(days=1)
+    return hours
+
+
 def next_working_day(d, availability):
     """Return the first day from d on where this member has hours > 0, or None if there is no such day."""
     last = last_team_day(availability)
@@ -715,10 +978,6 @@ def next_working_day(d, availability):
 def has_working_hours(availability):
     """Return True if the member has hours on at least one weekday."""
     return sum(availability.get(d, 0) for d in ("mon", "tue", "wed", "thu", "fri")) > 0
-
-
-# These are the working hours of a person who is not in [team]: 8 hours a day, Monday to Friday.
-OUTSIDE_TEAM_HOURS = {"mon": 8, "tue": 8, "wed": 8, "thu": 8, "fri": 8, "auto_assign": False}
 
 
 def plan_work(first_day, availability, hours):
@@ -813,30 +1072,50 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
         key, title, epic, assignee, status, start, end
     """
     done_dates = done_dates or {}
-    # Topologically sort so dependencies are always scheduled before dependents
+
+    # Plan the stories in groups, keeping the given order within a group:
+    # done (so they don't inflate epic end dates), started, in the active sprint, the rest.
+    # Started means at least the progress of work_starts_at in [statuses], or above 0 without it.
+    def _group(key):
+        if key not in story_data:
+            return 3
+        fields = story_data[key]["fields"]
+        progress = config.statuses.get(fields.get("status", {}).get("name", "").lower(), 0)
+        if progress >= 1.0:
+            return 0
+        started = (progress >= config.work_start_progress) if config.work_start_progress > 0 else (progress > 0)
+        if started:
+            return 1
+        if in_active_sprint(fields):
+            return 2
+        return 3
+
+    ordered_keys = sorted(ordered_keys, key=_group)
+    # Then make sure dependencies are always scheduled before dependents
     ordered_keys = topological_sort(ordered_keys, config.dependencies)
 
-    # Schedule done tasks first so they don't inflate epic end dates.
-    # Done tasks don't advance resource availability, so this is safe.
-    def _done_first(key):
-        if key not in story_data:
-            return 1
-        status = story_data[key]["fields"].get("status", {}).get("name", "")
-        progress = config.statuses.get(status.lower(), 0)
-        return 0 if progress >= 1.0 else 1
+    # Without auto-assign, stories without an assignee are planned one after another
+    # under "Unassigned", on a standard week
+    standard_week = {"mon": 8, "tue": 8, "wed": 8, "thu": 8, "fri": 8, "days_off": config.holidays}
+    team = dict(config.team)
+    if not config.auto_assign:
+        team["Unassigned"] = standard_week
 
-    ordered_keys = sorted(ordered_keys, key=_done_first)
+    # A story assigned in Jira to someone outside [team] stays with that person, who gets
+    # their own row on a standard week and is never given other stories
+    outsiders = sorted({get_assignee(story_data[key]["fields"]) for key in ordered_keys if key in story_data}
+                       - set(team) - {"Unassigned"})
+    for name in outsiders:
+        print(f"Note: {name} is not in [team], planning their stories on a standard week", file=sys.stderr)
+        team[name] = dict(standard_week, auto_assign=False)
 
     # member_states tracks the next available date per member
     member_states = {}  # {name: first day the member is free}, only for members with working days left
-    for name in config.team:
-        if has_working_hours(config.team[name]):
-            first_day = next_working_day(config.start_date, config.team[name])
+    for name in team:
+        if has_working_hours(team[name]):
+            first_day = next_working_day(config.start_date, team[name])
             if first_day is not None:
                 member_states[name] = first_day
-    # This has the hours of the team members and of the assignees who are not in [team]
-    availability = dict(config.team)
-    outside_hours = dict(OUTSIDE_TEAM_HOURS, days_off=set(config.holidays))
 
     scheduled = []
     story_end_dates = {}  # {story_key: end_date} for dependency resolution
@@ -862,7 +1141,23 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
         # Scale down remaining hours by progress (done stories keep full estimate)
         hours = total_hours if progress >= 1.0 else total_hours * (1.0 - progress)
 
+        # A story that started in the implementation status has already used part of its estimate.
+        # It has what is left of the estimate after the hours worked in that status or a later one,
+        # or what its status says is left if that is less. Over the estimate, only its status says
+        # what is left. The days it was parked in an earlier status don't count as worked.
+        # The hours worked are counted on the week of the Jira assignee, or a standard week.
+        work_start = None
+        if progress < 1.0 and issue.get("_implementation_date"):
+            work_start = date.fromisoformat(issue["_implementation_date"])
+            worked_week = team.get(assignee_name, standard_week)
+            worked = sum(hours_worked(date.fromisoformat(start), date.fromisoformat(end) if end else date.today(),
+                                      worked_week)
+                         for start, end in issue.get("_implementation_stretches", []))
+            if total_hours - worked > 0:
+                hours = min(hours, total_hours - worked)
+
         member = None
+        auto_assigned = False
         if progress >= 1.0 and story_key in done_dates:
             # A done story is shown on the days it was worked on, from its Jira status history
             start_date, end_date = done_dates[story_key]
@@ -881,39 +1176,40 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
             if progress >= 1.0:
                 # A done story keeps its assignee from Jira and takes no time from anyone.
                 # Without Jira dates, it is placed on standard working days from the plan start.
-                plan = plan_work(earliest, outside_hours, hours)
+                plan = plan_work(earliest, standard_week, hours)
             else:
-                # A story assigned in Jira stays with its assignee. Other stories go to the
-                # auto-assign member who finishes them first.
+                # A story assigned in Jira stays with its assignee, also one outside [team].
+                # Other stories go to the auto-assign member who finishes them first, or to
+                # "Unassigned" when auto_assign is false.
                 plan = None
                 if assignee_name in member_states:
                     member = assignee_name
-                elif assignee_name != "Unassigned" and assignee_name not in config.team:
-                    print(f"Warning: assignee '{assignee_name}' is not in [team], so their stories are planned "
-                          f"with 8 hours a day, Monday to Friday. Add them to [team] for their real hours.",
-                          file=sys.stderr)
-                    availability[assignee_name] = outside_hours
-                    member_states[assignee_name] = next_working_day(config.start_date, outside_hours)
-                    member = assignee_name
-                elif assignee_name in config.team:
-                    print(f"Warning: assignee '{assignee_name}' for {story_key} has no working hours left "
-                          f"in the plan, auto-assigning", file=sys.stderr)
-                if member is not None:
-                    plan = plan_work(max(member_states[member], earliest), availability[member], hours)
+                    plan = plan_work(max(member_states[member], earliest), team[member], hours)
                     if plan is None:
-                        print(f"Warning: '{member}' has no working days left for {story_key}, auto-assigning",
-                              file=sys.stderr)
                         member = None
                 if member is None:
-                    member, plan = pick_member(member_states, availability, earliest, hours)
+                    action = "auto-assigning" if config.auto_assign else "planning under 'Unassigned'"
+                    if assignee_name != "Unassigned":
+                        print(f"Warning: assignee '{assignee_name}' for {story_key} has no working hours left "
+                              f"in the plan, {action}", file=sys.stderr)
+                    if config.auto_assign:
+                        member, plan = pick_member(member_states, team, earliest, hours)
+                        auto_assigned = True
+                    else:
+                        member = "Unassigned"
+                        plan = plan_work(max(member_states[member], earliest), team[member], hours)
                 if plan[3] > 0:
                     print(f"Warning: {story_key} does not fit before '{member}' leaves the team on {plan[1]}, "
                           f"so its bar ends there", file=sys.stderr)
             start_date, end_date, cursor, _ = plan
 
+            # The days already worked show in the past
+            if work_start and work_start < start_date:
+                start_date = work_start
+
         if member is not None:
             # Only open stories take time from their member
-            free_from = next_working_day(cursor, availability[member])
+            free_from = next_working_day(cursor, team[member])
             if free_from is None:
                 del member_states[member]
             else:
@@ -923,16 +1219,22 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
         scheduled.append({
             "key": story_key,
             "title": title,
-            "epic": issue.get("_epic", "(No Epic)"),
+            "epic": issue.get("_epic", NO_EPIC),
             "epic_key": issue.get("_epic_key", ""),
             "assignee": member or assignee_name,
+            "auto_assigned": auto_assigned,  # the planner picked the member, not Jira
             "status": status,
             "sprint": sprint,
             "due": issue["fields"].get("duedate") or "",
-            "issue_type": (issue["fields"].get("issuetype") or {}).get("name", ""),
+            "created": (issue["fields"].get("created") or "")[:10],
+            "implementation_date": issue.get("_implementation_date", ""),
+            "implementation_stretches": issue.get("_implementation_stretches", []),
+            "implementation_status": config.implementation_status,
+            "issue_type":(issue["fields"].get("issuetype") or {}).get("name", ""),
             "issue_type_icon_url": (issue["fields"].get("issuetype") or {}).get("iconUrl", ""),
             "effort": 0 if progress >= 1.0 else hours,
             "total_hours": total_hours,
+            "points": sp,
             "estimated": sp is not None,
             "start": start_date.isoformat(),
             "end": (end_date + timedelta(days=1)).isoformat(),
@@ -1115,6 +1417,48 @@ def format_last_day(iso_end):
 def format_hours(hours):
     """Return hours as "8h" or "7.5h"."""
     return f"{hours:.0f}h" if hours == int(hours) else f"{hours:.1f}h"
+
+
+def format_points(points):
+    """Return story points as "5" or "0.5", or "" for a story without points."""
+    return "" if points is None else f"{points:g}"
+
+
+def story_age_days(created):
+    """Return the number of days from a created date (YYYY-MM-DD) up to today, or None without a date."""
+    if not created:
+        return None
+    try:
+        return max((date.today() - date.fromisoformat(created[:10])).days, 0)
+    except ValueError:
+        return None
+
+
+HOURS_PER_DAY = 8  # one working day, to turn an estimate in hours into days
+
+
+def implementation_work_days(stretches, holidays):
+    """Return the working days in the given stretches, or None without stretches.
+
+    Each stretch is [first day, day it moved back] as YYYY-MM-DD, with "" for a stretch that is
+    still going on, which counts up to today. Weekends and holidays don't count. A stretch that
+    started today, or that ended on the day it started, has 0 days.
+    """
+    if not stretches:
+        return None
+    try:
+        return sum(max(working_days_between(date.fromisoformat(start[:10]),
+                                            date.fromisoformat(end[:10]) if end else date.today(),
+                                            set(holidays)), 0)
+                   for start, end in stretches)
+    except ValueError:
+        return None
+
+
+def sprint_number(sprint):
+    """Return the number at the end of a sprint name, such as "26" for "DTIC Sprint 26", or the whole name."""
+    match = re.search(r"(\d+)\s*$", sprint)
+    return match.group(1) if match else sprint
 
 
 def format_signed(value, unit):
@@ -1325,7 +1669,8 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     without an image there is shown with an emoji.
     epics_info is {epic key: {key, name, start, due}} from fetch_epics. roadmap_epics lists
     epics without stories; each is shown as a striped bar from its start to its due date.
-    epic_order is the list of epic keys in the order of the configuration file.
+    epic_order is the list of epic keys in the order of the epic rows. Epics that are not in it
+    come after them.
     """
     # Assign colors to epics
     epics_seen = []
@@ -1354,7 +1699,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
         if s["epic"] not in epic_name_to_key and s.get("epic_key"):
             epic_name_to_key[s["epic"]] = s["epic_key"]
 
-    # Order of the epic rows: the epics of the configuration file in its order, then the others
+    # Order of the epic rows: the epics of epic_order in its order, then the others
     epics_info = epics_info or {}
     roadmap_by_key = {r["key"]: r for r in roadmap_epics}
     key_to_name = {key: name for name, key in epic_name_to_key.items()}
@@ -1365,8 +1710,32 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
         elif key in roadmap_by_key:
             epic_rows.append(("roadmap", roadmap_by_key[key]))
     epic_rows += [("stories", name) for name in epics_seen if ("stories", name) not in epic_rows]
+    # The stories without an epic come first
+    if ("stories", NO_EPIC) in epic_rows:
+        epic_rows.remove(("stories", NO_EPIC))
+        epic_rows.insert(0, ("stories", NO_EPIC))
     row_names = [row if kind == "stories" else row["name"] for kind, row in epic_rows]
     epic_color_map = {name: EPIC_COLORS[i % len(EPIC_COLORS)] for i, name in enumerate(row_names)}
+
+    # The [[badges]] of an epic: pills before its name, so a long name does not push them out of
+    # the Story column, and stripes on the left of its row, side by side when several badges have one.
+    # Each combination of stripe colors has one CSS class.
+    stripe_classes = {}
+
+    def badge_fields(epic_key):
+        badges = epics_info.get(epic_key, {}).get("badges", [])
+        pills = "".join(
+            f"<span class='field-badge' style='--badge-color: {b['color']}' "
+            f"title='{html.escape(b['title'])}'>{html.escape(b['text'])}</span>"
+            for b in badges)
+        stripes = tuple(dict.fromkeys(b["color"] for b in badges if b["stripe"]))
+        if stripes and stripes not in stripe_classes:
+            stripe_classes[stripes] = f"badge-stripe-{len(stripe_classes)}"
+        # The search box also finds an epic by the label and values of its badges, also by the part
+        # a badge cuts off. Not by the field name in the tooltip: a word such as "feature" in it
+        # would match every epic with that badge.
+        search_text = " ".join(b["search"] for b in badges)
+        return {"badges_html": pills, "badges_text": search_text, "stripe_class": stripe_classes.get(stripes, "")}
 
     # Create a parent task per epic
     for kind, row in epic_rows:
@@ -1389,6 +1758,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
                 "roadmap": True,
                 "is_epic": True,
                 "due_date": row["due"],
+                **badge_fields(row["key"]),
             })
             continue
         epic_name = row
@@ -1416,23 +1786,29 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             total_weight += weight
         epic_progress = weighted_progress / total_weight if total_weight > 0 else 0
 
+        epic_points = sum(s.get("points") or 0 for s in epic_stories)
+
         tasks.append({
             "id": task_id,
             "text": epic_name,
             "start_date": epic_start,
             "end_date": epic_end,
+            "points": format_points(epic_points) if epic_points else "",
             "effort": effort_str,
             "status": "",
             "color": epic_color_map[epic_name],
             "type": "project",
-            "open": True,
             "is_epic": True,
+            # The stories without an epic are a group, not one piece of work, so the row gets no bar
+            "no_bar": epic_name == NO_EPIC,
+            "open": True,
             "icon": ISSUE_TYPE_ICONS["epic"],
             "unestimated": epic_unestimated,
             "icon_url": epic_icon_url,
             "story_key": epic_name_to_key.get(epic_name, ""),
             "due_date": epics_info.get(epic_name_to_key.get(epic_name, ""), {}).get("due", ""),
             "progress": epic_progress,
+            **badge_fields(epic_name_to_key.get(epic_name, "")),
             **(changes["epics"].get(epic_name, {}) if changes else {}),
         })
 
@@ -1460,15 +1836,33 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             "id": task_id,
             "text": f"{s['key']}: {s['title']}",
             "assignee": s["assignee"],
+            "auto_assigned": s.get("auto_assigned", False),
             "start_date": s["start"],
             "end_date": s["end"],
             "progress": progress,
+            "points": format_points(s.get("points")),
+            "points_value": s.get("points") or 0,
+            "hours": effort,
+            "sprint": sprint_number(s.get("sprint", "")),
+            "sprint_name": s.get("sprint", ""),
             "effort": effort_str,
             "status": s["status"],
             "color": epic_color_map[s["epic"]],
             "parent": epic_task_ids[s["epic"]],
             "story_key": s["key"],
             "due_date": s.get("due", ""),
+            "created": s.get("created", ""),
+            # Days since the story was created, only for open stories: a done story stops ageing
+            "age_days": story_age_days(s.get("created", "")) if progress < 1.0 else None,
+            "implementation_date": s.get("implementation_date", ""),
+            "implementation_status": s.get("implementation_status", ""),
+            # Working days in the implementation status or a later one, only for open stories
+            "implementation_days": (implementation_work_days(s.get("implementation_stretches", []), holidays)
+                                    if progress < 1.0 else None),
+            # True when the story went back to an earlier status in between, so those days don't count
+            "implementation_parked": len(s.get("implementation_stretches", [])) > 1,
+            # The estimate in working days of 8 hours, to compare with the days in implementation
+            "estimate_days": round(s.get("total_hours", 0) / HOURS_PER_DAY, 1),
             "icon": issue_type_icon(s.get("issue_type", "")),
             "icon_url": s.get("issue_type_icon_url", ""),
             "unestimated": unestimated,
@@ -1558,6 +1952,13 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
         f"  .gantt_row.{cls}, .gantt_task_row.{cls} {{ background: {status_colors[name]}; }}"
         for name, cls in status_classes.items()
     )
+    status_css += "".join(
+        # One 4px stripe per color; a wider shadow lies under the narrower ones before it. The padding
+        # keeps the icon and name 2px clear of the stripes, as dhtmlx's 6px does for one stripe.
+        f"\n  .gantt_row.{cls} .gantt_cell:first-child {{ padding-left: {4 * len(colors) + 2}px; box-shadow: "
+        f"{', '.join(f'inset {4 * (i + 1)}px 0 0 {color}' for i, color in enumerate(colors))}; }}"
+        for colors, cls in stripe_classes.items()
+    )
 
     print(f"""<!DOCTYPE html>
 <html lang="en">
@@ -1567,7 +1968,11 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
 <link rel="stylesheet" href="https://cdn.dhtmlx.com/gantt/9.0/dhtmlxgantt.css">
 <style>
   body {{ font-family: sans-serif; margin: 20px; }}
-  #gantt_here {{ width: 100%; height: calc(100vh - 110px); }}
+  /* Keep bar colours and row backgrounds when printing / saving as PDF */
+  @media print {{
+    * {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
+  }}
+  #gantt_here {{ width: 100%; height: calc(100vh - 150px); }}
   .gantt_task_line.task-done {{ opacity: 0.45; filter: grayscale(60%); }}
   .gantt_task_line.task-done .gantt_task_content {{ text-decoration: line-through; }}
   .gantt_row.task-done-row {{ color: #999; }}
@@ -1584,6 +1989,62 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   }}
   #toolbar button:hover {{ background: #e8e8e8; }}
   #toolbar button.active {{ background: #4e79a7; color: #fff; border-color: #4e79a7; }}
+  #toolbar button:disabled {{ cursor: wait; color: #888; background: #f4f4f4; }}
+  #refresh-status {{ font-size: 12px; color: #c33; }}
+  /* Covers the page while a refresh from Jira runs; the page reloads when it is done */
+  #refresh-overlay {{
+    position: fixed; inset: 0; z-index: 10000; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 14px;
+    background: rgba(255, 255, 255, 0.7); color: #333; font-size: 14px; cursor: wait;
+  }}
+  #refresh-overlay[hidden] {{ display: none; }}
+  #refresh-overlay .spinner {{
+    width: 44px; height: 44px; border: 4px solid #d5dfeb; border-top-color: #4e79a7;
+    border-radius: 50%; animation: refresh-spin 0.8s linear infinite;
+  }}
+  @keyframes refresh-spin {{ to {{ transform: rotate(360deg); }} }}
+  /* Marks a member the planner picked; the soft blue of the toolbar, quiet next to the grey label */
+  .auto-badge {{
+    display: inline-block; margin-left: 3px; padding: 0 5px; border: 1px solid #c9d7e8; border-radius: 7px;
+    background: #eaf0f7; color: #3d6491; font-size: 9px; font-weight: 600; line-height: 12px;
+    letter-spacing: 0.3px; text-transform: uppercase; vertical-align: 1px; cursor: help;
+  }}
+  /* Days since a story was created; neutral grey so it reads as information, not as a warning */
+  .age-badge {{
+    display: inline-block; margin-left: 3px; padding: 0 5px; border: 1px solid #d6d6d6; border-radius: 7px;
+    background: #f2f2f2; color: #555; font-size: 9px; font-weight: 600; line-height: 12px;
+    vertical-align: 1px; cursor: help;
+  }}
+  /* Days since a story started in the implementation status */
+  .impl-badge {{
+    display: inline-block; margin-left: 3px; padding: 0 5px; border: 1px solid #b9dcc4; border-radius: 7px;
+    background: #ebf6ee; color: #2f6b42; font-size: 9px; font-weight: 600; line-height: 12px;
+    vertical-align: 1px; cursor: help;
+  }}
+  /* Longer in implementation than the estimate */
+  .impl-badge.impl-over {{ border-color: #f0c08a; background: #fdf1e3; color: #9a5a12; }}
+  /* A [[badges]] pill on an epic row, in a light and a dark shade of the color of the badge */
+  .field-badge {{
+    display: inline-block; margin-right: 4px; padding: 0 5px; border-radius: 7px;
+    border: 1px solid color-mix(in srgb, var(--badge-color) 55%, #fff);
+    background: color-mix(in srgb, var(--badge-color) 15%, #fff);
+    color: color-mix(in srgb, var(--badge-color) 65%, #000);
+    font-size: 9px; font-weight: 600; line-height: 12px; letter-spacing: 0.3px;
+    text-transform: uppercase; vertical-align: 1px; cursor: help;
+  }}
+  /* Story points in the Points column; the green of the impl badge */
+  .points-badge {{
+    display: inline-block; min-width: 14px; padding: 0 6px; border: 1px solid #b9dcc4; border-radius: 8px;
+    background: #ebf6ee; color: #2f6b42; font-size: 11px; font-weight: 600; line-height: 16px;
+    text-align: center; vertical-align: middle;
+  }}
+  .points-badge.points-over {{ border-color: #f0c08a; background: #fdf1e3; color: #9a5a12; }}
+  .gantt_row.task-done-row .points-badge {{ opacity: 0.6; }}
+  /* Epic rows stand out from their stories */
+  .gantt_row.epic-row, .gantt_task_row.epic-row {{ background: #eef2f7; }}
+  .gantt_row.epic-row {{ font-weight: 600; }}
+  /* A darker shade of the blue-grey epic row background */
+  .gantt_row.epic-row .points-badge {{ border-color: #52677f; background: #52677f; color: #fff; }}
   #show-done-wrap {{ display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }}
   #search-wrap {{ display: flex; align-items: center; gap: 6px; margin-left: auto; }}
   #search-input {{
@@ -1592,6 +2053,16 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   }}
   #search-input:focus {{ outline: none; border-color: #4e79a7; }}
   #search-count {{ font-size: 12px; color: #666; min-width: 70px; }}
+  #member-filter {{ margin-bottom: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; }}
+  #member-filter .filter-label {{ color: #666; margin-right: 4px; }}
+  .member-badge {{
+    padding: 3px 10px; border: 1px solid #ccc; border-radius: 12px;
+    background: #fff; cursor: pointer; font-size: 12px;
+  }}
+  .member-badge:hover {{ background: #e8e8e8; }}
+  .member-badge.active {{ background: #4e79a7; color: #fff; border-color: #4e79a7; }}
+  .member-badge .count {{ margin-left: 4px; opacity: 0.7; }}
+  #member-clear {{ border: none; background: none; color: #4e79a7; cursor: pointer; font-size: 12px; text-decoration: underline; }}
   .gantt_task_line.search-match {{ outline: 3px solid #ffd400; outline-offset: 2px; z-index: 50; }}
   .gantt_task_line.search-dim {{ opacity: 0.2; }}
   .gantt_row.search-match-row {{ background: #fff7c2 !important; font-weight: 600; }}
@@ -1602,16 +2073,8 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   .gantt_task_line.change-removed {{ opacity: 0.5; }}
   .gantt_task_line.roadmap-epic {{ opacity: 0.75;
     background-image: repeating-linear-gradient(45deg, rgba(255,255,255,0.45) 0 6px, transparent 6px 12px); }}
-  .gantt_task_line.epic-bar .gantt_task_content {{ font-weight: 600; }}
-  .gantt_task_line.due-late {{ box-shadow: 0 0 0 2px #d62728; animation: due-late-glow 0.5s ease-in-out infinite; }}
-  @keyframes due-late-glow {{
-    0%, 100% {{ box-shadow: 0 0 0 2px #d62728, 0 0 2px 1px rgba(214, 39, 40, 0.3); }}
-    50% {{ box-shadow: 0 0 0 2px #d62728, 0 0 8px 4px rgba(214, 39, 40, 0.6); }}
-  }}
-  @media (prefers-reduced-motion: reduce) {{
-    .gantt_task_line.due-late {{ animation: none; }}
-  }}
-  .gantt_task_line.change-late {{ box-shadow: 0 0 0 2px #ff8c00; }}
+  .gantt_task_line.no-bar {{ display: none; }}
+  .gantt_task_line.change-late {{ box-shadow: 0 0 0 2px #d62728; }}
   .delta-up {{ color: #c62828; font-weight: 600; }}
   .delta-down {{ color: #2e7d32; font-weight: 600; }}
   .due-marker {{ position: absolute; width: 10px; height: 10px; background: #d62728; border: 1px solid #fff;
@@ -1651,6 +2114,8 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
 <body>
 <h2>Gantt Chart — {date.today()}</h2>
 <div id="toolbar">
+  <button id="refresh-button" hidden onclick="refreshChart()" title="Fetch the stories from Jira again and redraw the chart">Refresh from Jira</button>
+  <span id="refresh-status"></span>
   <div class="zoom-buttons">
     <button onclick="setZoom('day')">Day</button>
     <button onclick="setZoom('week')">Week</button>
@@ -1658,13 +2123,44 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     <button onclick="setZoom('quarter')">Quarter</button>
     <button onclick="zoomToFit()">Fit All</button>
   </div>
-  <label id="show-done-wrap"><input type="checkbox" id="show-done" onchange="onShowDoneChange()"> Show done stories</label>
+  <label id="show-done-wrap"><input type="checkbox" id="show-done" onchange="applyFilters()"> Show done stories</label>
   {changes_toggle}
   <div id="search-wrap">
     <input id="search-input" type="search" placeholder="Search stories, for example PROJ-123" oninput="onSearchInput()" onkeydown="if(event.key==='Escape'){{this.value='';onSearchInput();}}">
     <span id="search-count"></span>
   </div>
 </div>
+<div id="member-filter"></div>
+<div id="refresh-overlay" hidden role="status" aria-live="polite">
+  <div class="spinner"></div>
+  <div>Fetching the stories from Jira…</div>
+</div>
+<script>
+// The refresh button works only when the page comes from "jira_smurf.py serve", not from a file
+if (location.protocol.startsWith("http")) {{
+  document.getElementById("refresh-button").hidden = false;
+}}
+function refreshChart() {{
+  const button = document.getElementById("refresh-button");
+  const status = document.getElementById("refresh-status");
+  const overlay = document.getElementById("refresh-overlay");
+  button.disabled = true;
+  button.textContent = "Refreshing…";
+  status.textContent = "";
+  overlay.hidden = false;
+  fetch("refresh", {{method: "POST", headers: {{"X-Jira-Smurf": "refresh"}}}})
+    .then(response => response.text().then(text => {{
+      if (!response.ok) throw new Error(text || response.statusText);
+      location.reload();
+    }}))
+    .catch(error => {{
+      overlay.hidden = true;
+      button.disabled = false;
+      button.textContent = "Refresh from Jira";
+      status.textContent = "Refresh failed: " + error.message;
+    }});
+}}
+</script>
 <div id="gantt_here"></div>
 {summary_html}
 {trend}
@@ -1676,12 +2172,6 @@ var showChanges = {show_changes_json};
 function signed(value, unit) {{
   var number = Math.round(Math.abs(value) * 10) / 10;
   return (value > 0 ? "+" : "\u2212") + number + unit;
-}}
-// Remaining hours, followed by the change of the estimate since the baseline.
-function effortText(task) {{
-  if (!showChanges || !task.hours_delta) return task.effort;
-  var cls = task.hours_delta > 0 ? "delta-up" : "delta-down";
-  return task.effort + " <span class='" + cls + "'>" + signed(task.hours_delta, "h") + "</span>";
 }}
 // "NEW" for a story that is not in the baseline, or the working days its end date moved.
 function movedText(task) {{
@@ -1707,11 +2197,22 @@ gantt.config.columns = [
       var image = typeIconImages[task.icon_url];
       var icon = image ? "<img class='type-icon' src='" + image + "' alt=''>" :
         task.icon ? "<span class='type-icon'>" + task.icon + "</span>" : "";
-      var title = task.is_epic ? "<b>" + task.text + "</b>" : task.text;
-      return icon + "<span title='" + task.text.replace(/'/g, "&#39;") + "'>" + title + "</span>";
+      // The badges come before the name, so a long name does not hide them
+      return icon + (task.badges_html || "") +
+        "<span title='" + task.text.replace(/'/g, "&#39;") + "'>" + task.text + "</span>";
     }} }},
   {{name: "status", label: "Status", align: "left", width: 120, resize: true}},
-  {{name: "effort", label: "Remaining", align: "center", width: 100, resize: true, template: effortText}}{moved_column}
+  {{name: "points", label: "Points", align: "center", width: 70, resize: true,
+    template: function(task) {{
+      if (!task.points) return "";
+      // Orange like the impl badge when the story is longer in implementation than its estimate
+      var over = task.implementation_days != null && task.implementation_days > task.estimate_days;
+      return "<span class='points-badge" + (over ? " points-over" : "") + "'>" + task.points + "</span>";
+    }} }},
+  {{name: "sprint", label: "Sprint", align: "center", width: 70, resize: true,
+    template: function(task) {{
+      return task.sprint ? "<span title='" + task.sprint_name.replace(/'/g, "&#39;") + "'>" + task.sprint + "</span>" : "";
+    }} }}{moved_column}
 ];
 gantt.templates.tooltip_text = function(start, end, task) {{
   if (!task.text) return "";
@@ -1799,18 +2300,30 @@ function setZoom(level) {{
   }});
 }}
 var hideDone = false;
+var selectedMembers = {{}};  // {{assignee: true}} for the team members whose stories are shown; empty shows all
+var memberCounts = {{}};  // {{assignee: count element}} in the badges
 var epicDates = {{}};  // {{epicId: {{start_date, end_date}}}} with the dates from all stories
+var epicTotals = {{}};  // {{epicId: {{effort, points}}}} with the totals of all stories
+function isFiltering() {{
+  return hideDone || Object.keys(selectedMembers).length > 0;
+}}
+function isStoryShown(task) {{
+  if (hideDone && task.progress >= 1) return false;
+  return Object.keys(selectedMembers).length === 0 || !!selectedMembers[task.assignee];
+}}
 function isTaskShown(task) {{
   if (task.removed) return showChanges;
-  if (!hideDone) return true;
-  if (task.type === "project") return !!openStoryDates(task.id);
-  return task.progress < 1;
+  if (!isFiltering()) return true;
+  // An epic without stories has no team member
+  if (task.roadmap) return Object.keys(selectedMembers).length === 0;
+  if (gantt.hasChild(task.id)) return !!shownStoryDates(task.id);
+  return isStoryShown(task);
 }}
-// Earliest start and latest end of the stories of an epic that are not done, or null.
-function openStoryDates(epicId) {{
+// Earliest start and latest end of the stories of an epic that pass the filters, or null.
+function shownStoryDates(epicId) {{
   var start = null, end = null;
   gantt.eachTask(function(child) {{
-    if (child.progress >= 1) return;
+    if (!isStoryShown(child)) return;
     if (!start || child.start_date < start) start = child.start_date;
     if (!end || child.end_date > end) end = child.end_date;
   }}, epicId);
@@ -1819,17 +2332,90 @@ function openStoryDates(epicId) {{
 gantt.attachEvent("onBeforeTaskDisplay", function(id, task) {{
   return isTaskShown(task);
 }});
-function onShowDoneChange() {{
+// Remaining hours and points of the stories of an epic that pass the filters.
+// The hours get a "?" when one of those stories has no estimate.
+function shownStoryTotals(epicId) {{
+  var hours = 0, points = 0, guess = false;
+  gantt.eachTask(function(child) {{
+    if (!isStoryShown(child)) return;
+    hours += child.hours || 0;
+    points += child.points_value || 0;
+    if (child.unestimated) guess = true;
+  }}, epicId);
+  return {{
+    effort: Math.round(hours * 10) / 10 + "h" + (guess ? "?" : ""),
+    points: points ? String(Math.round(points * 100) / 100) : "",
+  }};
+}}
+// Show in each badge the number of stories of that member that pass the done filter.
+function updateMemberCounts() {{
+  var counts = {{}};
+  gantt.eachTask(function(task) {{
+    if (!task.assignee || (hideDone && task.progress >= 1)) return;
+    counts[task.assignee] = (counts[task.assignee] || 0) + 1;
+  }});
+  Object.keys(memberCounts).forEach(function(name) {{
+    memberCounts[name].textContent = counts[name] || 0;
+  }});
+}}
+// One badge per assignee of the stories, "Unassigned" last. A click selects or deselects that member.
+function buildMemberFilter() {{
+  var counts = {{}};
+  gantt.eachTask(function(task) {{
+    if (task.assignee) counts[task.assignee] = (counts[task.assignee] || 0) + 1;
+  }});
+  var names = Object.keys(counts).sort(function(a, b) {{
+    if (a === "Unassigned" || b === "Unassigned") return a === "Unassigned" ? 1 : -1;
+    return a.localeCompare(b);
+  }});
+  var bar = document.getElementById("member-filter");
+  var label = document.createElement("span");
+  label.className = "filter-label";
+  label.textContent = "Team member:";
+  bar.appendChild(label);
+  names.forEach(function(name) {{
+    var badge = document.createElement("button");
+    badge.className = "member-badge";
+    badge.textContent = name;
+    var count = document.createElement("span");
+    count.className = "count";
+    memberCounts[name] = count;
+    badge.appendChild(count);
+    badge.onclick = function() {{
+      if (selectedMembers[name]) delete selectedMembers[name]; else selectedMembers[name] = true;
+      badge.classList.toggle("active", !!selectedMembers[name]);
+      applyFilters();
+    }};
+    bar.appendChild(badge);
+  }});
+  var clear = document.createElement("button");
+  clear.id = "member-clear";
+  clear.textContent = "Show all";
+  clear.onclick = function() {{
+    selectedMembers = {{}};
+    bar.querySelectorAll(".member-badge").forEach(function(b) {{ b.classList.remove("active"); }});
+    applyFilters();
+  }};
+  bar.appendChild(clear);
+}}
+function applyFilters() {{
   hideDone = !document.getElementById("show-done").checked;
+  document.getElementById("member-clear").style.display = Object.keys(selectedMembers).length ? "" : "none";
   gantt.eachTask(function(task) {{
     if (task.parent !== gantt.config.root_id || task.removed || task.roadmap) return;
     if (!epicDates[task.id]) epicDates[task.id] = {{ start_date: task.start_date, end_date: task.end_date }};
-    var dates = hideDone ? openStoryDates(task.id) : null;
-    // A "project" task takes its dates from all its children, so use a plain task while done stories are hidden.
+    var dates = isFiltering() ? shownStoryDates(task.id) : null;
+    // A "project" task takes its dates from all its children, so use a plain task while stories are hidden.
     task.type = dates ? "task" : "project";
     task.start_date = (dates || epicDates[task.id]).start_date;
     task.end_date = (dates || epicDates[task.id]).end_date;
+    // The totals of the epic row count only the stories that are shown
+    if (!epicTotals[task.id]) epicTotals[task.id] = {{ effort: task.effort, points: task.points }};
+    var totals = isFiltering() ? shownStoryTotals(task.id) : epicTotals[task.id];
+    task.effort = totals.effort;
+    task.points = totals.points;
   }});
+  updateMemberCounts();
   zoomToFit();
   gantt.render();
 }}
@@ -1872,12 +2458,6 @@ function zoomToFit() {{
 var searchTerm = "";
 var searchMatchIds = {{}};      // {{taskId: true}} for tasks whose own text matches
 var searchVisibleIds = {{}};    // {{taskId: true}} for matches + their ancestors (kept un-dimmed)
-// True when the bar ends after the end of the due date of the task.
-function endsAfterDueDate(task) {{
-  if (!task.due_date) return false;
-  var dayAfterDue = gantt.date.add(gantt.date.str_to_date("%Y-%m-%d")(task.due_date), 1, "day");
-  return task.end_date > dayAfterDue;
-}}
 function changeBarClass(task) {{
   if (!showChanges) return "";
   if (task.removed) return " change-removed";
@@ -1892,11 +2472,8 @@ function joinClasses() {{
   return Array.prototype.filter.call(arguments, Boolean).join(" ");
 }}
 gantt.templates.task_class = function(start, end, task) {{
-  // Red for ending after the due date wins over orange for being behind the baseline
-  var pastDueDate = !task.removed && task.progress < 1 && endsAfterDueDate(task);
-  var base = (task.progress >= 1 ? "clickable-task task-done" : "clickable-task") +
-    (pastDueDate ? " due-late" : changeBarClass(task)) +
-    (task.roadmap ? " roadmap-epic" : "") + (task.is_epic ? " epic-bar" : "");
+  var base = (task.progress >= 1 ? "clickable-task task-done" : "clickable-task") + changeBarClass(task) +
+    (task.roadmap ? " roadmap-epic" : "") + (task.no_bar ? " no-bar" : "");
   if (!searchTerm) return base;
   if (searchMatchIds[task.id]) return base + " search-match";
   if (searchVisibleIds[task.id]) return base;
@@ -1906,11 +2483,16 @@ var statusClasses = {status_classes_json};  // {{lowercase status: CSS class}} f
 function statusRowClass(task) {{
   return statusClasses[(task.status || "").toLowerCase()] || "";
 }}
+function epicRowClass(task) {{
+  // Not task.type: the filters turn an epic into a plain task while some of its stories are hidden
+  return task.is_epic ? "epic-row" : "";
+}}
 gantt.templates.task_row_class = function(start, end, task) {{
-  return joinClasses(statusRowClass(task), changeRowClass(task));
+  return joinClasses(epicRowClass(task), statusRowClass(task), changeRowClass(task));
 }};
 gantt.templates.grid_row_class = function(start, end, task) {{
-  var base = joinClasses(task.progress >= 1 ? "task-done-row" : "", statusRowClass(task), changeRowClass(task));
+  var base = joinClasses(epicRowClass(task), task.progress >= 1 ? "task-done-row" : "",
+    statusRowClass(task), changeRowClass(task), task.stripe_class || "");
   if (!searchTerm) return base;
   if (searchMatchIds[task.id]) return (base + " search-match-row").trim();
   if (searchVisibleIds[task.id]) return base;
@@ -1930,7 +2512,7 @@ function onSearchInput() {{
   var firstMatchId = null;
   var matchCount = 0;
   gantt.eachTask(function(task) {{
-    var hay = ((task.text || "") + " " + (task.story_key || "")).toLowerCase();
+    var hay = ((task.text || "") + " " + (task.story_key || "") + " " + (task.badges_text || "")).toLowerCase();
     if (hay.indexOf(raw) !== -1) {{
       searchMatchIds[task.id] = true;
       searchVisibleIds[task.id] = true;
@@ -1954,7 +2536,34 @@ gantt.templates.task_text = function(start, end, task) {{
 }};
 gantt.templates.rightside_text = function(start, end, task) {{
   var parts = [];
-  if (task.assignee) parts.push(task.assignee);
+  if (task.assignee) {{
+    var name = task.assignee;
+    if (task.auto_assigned) {{
+      name += " <span class='auto-badge' title='Not assigned in Jira: the planner picked the team member who is free first'>auto</span>";
+    }}
+    parts.push(name);
+  }}
+  if (task.age_days !== null && task.age_days !== undefined) {{
+    var created = gantt.date.date_to_str("%d %M %Y")(gantt.date.str_to_date("%Y-%m-%d")(task.created));
+    var days = task.age_days === 1 ? "1 day" : task.age_days + " days";
+    parts[parts.length - 1] = (parts[parts.length - 1] || "") +
+      " <span class='age-badge' title='Created " + created + ", " + days + " ago'>" + task.age_days + "d</span>";
+  }}
+  if (task.implementation_days !== null && task.implementation_days !== undefined) {{
+    var moved = gantt.date.date_to_str("%d %M %Y")(gantt.date.str_to_date("%Y-%m-%d")(task.implementation_date));
+    var plural = function(n) {{ return n === 1 ? "1 working day" : n + " working days"; }};
+    var diff = Math.round((task.implementation_days - task.estimate_days) * 10) / 10;
+    var verdict = diff > 0 ? plural(diff) + " over the estimate"
+                : diff < 0 ? plural(-diff) + " left in the estimate" : "exactly the estimate";
+    var title = "Started in " + task.implementation_status + " on " + moved + ". " +
+      plural(task.implementation_days) + " in " + task.implementation_status + " or a later status" +
+      (task.implementation_parked ? ", not counting the days back in an earlier status" : "") +
+      ". Estimate: " + plural(task.estimate_days) +
+      (task.points ? " (" + task.points + " SP)" : "") + ", so " + verdict + ".";
+    parts[parts.length - 1] = (parts[parts.length - 1] || "") +
+      " <span class='impl-badge" + (diff > 0 ? " impl-over" : "") + "' title='" + title + "'>impl " +
+      task.implementation_days + "/" + task.estimate_days + "d</span>";
+  }}
   parts.push(gantt.date.date_to_str("%d %M")(end));
   return "<span style='font-size:11px;color:#666;'>" + parts.join(" \u2022 ") + "</span>";
 }};
@@ -2047,7 +2656,8 @@ gantt.addMarker({{ start_date: new Date(), css: "today-marker", text: "Today" }}
   }});
 }})();
 gantt.parse({{ data: {tasks_json}, links: {links_json} }});
-onShowDoneChange();
+buildMemberFilter();
+applyFilters();
 (function() {{
   var svg = document.getElementById("trend-svg");
   if (!svg) return;
@@ -2147,11 +2757,21 @@ def run_gantt(config_path, history_dir=None, since=None):
                 added += 1
         print(f"  Added {added} stories from sprints", file=sys.stderr)
 
+    # Leave out the stories of the exclude list
+    if config.exclude:
+        excluded = [key for key in ordered_keys if is_excluded(key, config.exclude)]
+        for key in excluded:
+            ordered_keys.remove(key)
+            del story_data[key]
+        if excluded:
+            print(f"Excluded {len(excluded)} {'story' if len(excluded) == 1 else 'stories'}: "
+                  f"{', '.join(excluded)}", file=sys.stderr)
+
     # Fetch any dependency targets not already in the scheduled set
     dep_keys_needed = set()
     for deps in config.dependencies.values():
         for dep_key in deps:
-            if dep_key not in story_data:
+            if dep_key not in story_data and not is_excluded(dep_key, config.exclude):
                 dep_keys_needed.add(dep_key)
     if dep_keys_needed:
         print(f"Fetching {len(dep_keys_needed)} dependency stories...", file=sys.stderr)
@@ -2178,6 +2798,11 @@ def run_gantt(config_path, history_dir=None, since=None):
             current = config.dependencies.get(key, [])
             config.dependencies[key] = current + sorted(firsts - set(current))
 
+    # A story does not wait for an excluded story
+    if config.exclude:
+        config.dependencies = {key: [dep for dep in deps if not is_excluded(dep, config.exclude)]
+                               for key, deps in config.dependencies.items()}
+
     # Resolve epics and attach to issue dicts
     epic_cache = {}
     for issue in story_data.values():
@@ -2201,9 +2826,27 @@ def run_gantt(config_path, history_dir=None, since=None):
             print(f"  {missing} done {'story has' if missing == 1 else 'stories have'} no change to a done status "
                   f"in the history, so the plan start is used", file=sys.stderr)
 
-    # The planner takes stories in this order; the chart rows keep the order of the configuration file
+    # Find the stretches open stories spent in the implementation status or a later one, from their
+    # status history. Only stories that are at least that far along can have been there, so only
+    # those are fetched.
+    if config.implementation_status:
+        impl_progress = config.statuses[config.implementation_status.lower()]
+        open_keys = [key for key in ordered_keys
+                     if impl_progress <= config.statuses.get(
+                         story_data[key]["fields"].get("status", {}).get("name", "").lower(), 0) < 1.0]
+        if open_keys:
+            print(f"Fetching the status history of {len(open_keys)} open stories...", file=sys.stderr)
+            for key in open_keys:
+                stretches = implementation_stretches(fetch_status_changes(key), config.implementation_status,
+                                                     config.statuses)
+                if stretches:
+                    story_data[key]["_implementation_date"] = stretches[0][0].isoformat()
+                    story_data[key]["_implementation_stretches"] = [
+                        [start.isoformat(), end.isoformat() if end else ""] for start, end in stretches]
+
+    # The planner takes stories in this order; the story rows keep the order of the configuration file
     schedule_keys = ordered_keys
-    if config.use_backlog_order:
+    if config.use_backlog_order and ordered_keys:
         print("Fetching the backlog order...", file=sys.stderr)
         positions = fetch_backlog_order(ordered_keys)
         schedule_keys = sorted(ordered_keys, key=lambda key: positions.get(key, len(positions)))
@@ -2249,7 +2892,13 @@ def run_gantt(config_path, history_dir=None, since=None):
     epics_info = {}
     if epic_keys:
         print(f"Fetching the dates of {len(epic_keys)} epics...", file=sys.stderr)
-        epics_info = fetch_epics(epic_keys, find_start_date_field())
+        jira_fields = fetch_jira_fields()
+        field_names = {field["id"]: field.get("name", field["id"]) for field in jira_fields if field.get("id")}
+        for badge in config.badges:
+            if jira_fields and badge["field"] not in field_names:
+                print(f"Warning: badge field {badge['field']} is not a field in Jira, "
+                      f"so no epic gets this badge", file=sys.stderr)
+        epics_info = fetch_epics(epic_keys, find_start_date_field(jira_fields), config.badges, field_names)
     roadmap_epics = []
     for key in empty_epics:
         info = epics_info.get(key)
@@ -2261,6 +2910,13 @@ def run_gantt(config_path, history_dir=None, since=None):
             info = dict(info, start=info["due"])
         print(f"  Epic {key} has no stories yet, showing its dates from Jira", file=sys.stderr)
         roadmap_epics.append(info)
+
+    # The epic rows follow the configuration file, or the Jira rank of the epics with use_backlog_order
+    epic_order = list(config.epics)
+    if config.use_backlog_order and epic_keys:
+        print("Fetching the rank of the epics...", file=sys.stderr)
+        epic_positions = fetch_backlog_order(epic_keys)
+        epic_order = sorted(epic_keys, key=lambda key: epic_positions.get(key, len(epic_positions)))
 
     # Put the Jira issue type icons into the page, so it shows them without a Jira login
     epic_icon_url = find_epic_icon_url(story_data.values())
@@ -2275,7 +2931,7 @@ def run_gantt(config_path, history_dir=None, since=None):
         icon_images = fetch_icon_images(icon_urls)
 
     write_gantt_html(scheduled, config.statuses, config.dependencies, config.holidays, config.status_colors,
-                     changes, snapshots, icon_images, epic_icon_url, epics_info, roadmap_epics, config.epics)
+                     changes, snapshots, icon_images, epic_icon_url, epics_info, roadmap_epics, epic_order)
 
 
 def run_velocity(config_path, weeks):
@@ -2416,6 +3072,120 @@ def write_html(rows, columns):
     print("</body></html>")
 
 
+class _Tee(io.TextIOBase):
+    """Write to several streams at once."""
+
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, text):
+        for stream in self.streams:
+            stream.write(text)
+        return len(text)
+
+    def flush(self):
+        for stream in self.streams:
+            stream.flush()
+
+
+def build_gantt_page(config_path, history_dir=None, since=None):
+    """Run the gantt command and return (HTML of the chart, None), or (None, error message)."""
+    page, log = io.StringIO(), io.StringIO()
+    try:
+        with contextlib.redirect_stdout(page), contextlib.redirect_stderr(_Tee(sys.stderr, log)):
+            run_gantt(config_path, history_dir, since)
+    except (Exception, SystemExit) as e:
+        # Errors in the configuration print a message and exit; Jira errors raise an exception
+        lines = [line for line in log.getvalue().splitlines() if line.strip()]
+        message = lines[-1] if isinstance(e, SystemExit) and lines else f"{type(e).__name__}: {e}"
+        print(f"Refresh failed: {message}", file=sys.stderr)
+        return None, message
+    return page.getvalue(), None
+
+
+def run_serve(config_path, history_dir, since, port, open_browser):
+    """Serve the Gantt chart on localhost. Its refresh button fetches the stories from Jira again.
+
+    With history_dir, each refresh also stores a plan snapshot and the chart as
+    gantt-YYYY-MM-DD.html there, like generate-gantt.sh does.
+    """
+    state = {"page": None}
+    lock = threading.Lock()
+
+    def refresh():
+        page, error = build_gantt_page(config_path, history_dir, since)
+        if page is None:
+            return error
+        state["page"] = page
+        if history_dir:
+            path = os.path.join(history_dir, f"gantt-{date.today()}.html")
+            with open(path, "w", encoding="utf-8", newline="") as f:
+                f.write(page)
+            print(f"Wrote {path}", file=sys.stderr)
+        return None
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def send_text(self, status, text, content_type="text/plain"):
+            body = text.encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", f"{content_type}; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            if self.path not in ("/", "/index.html"):
+                self.send_text(404, "Not found")
+            elif state["page"] is None:
+                self.send_text(503, "The chart is not ready. See the terminal for the error, "
+                                    "then click refresh or restart the server.")
+            else:
+                self.send_text(200, state["page"], "text/html")
+
+        def do_POST(self):
+            # The custom header keeps other web sites from starting a refresh: browsers do not
+            # send it across sites without a CORS answer, which this server never gives.
+            if self.path != "/refresh" or self.headers.get("X-Jira-Smurf") != "refresh":
+                self.send_text(404, "Not found")
+                return
+            if not lock.acquire(blocking=False):
+                # A refresh is already running; wait for it instead of starting another one
+                with lock:
+                    pass
+                self.send_text(200, "ok")
+                return
+            try:
+                error = refresh()
+            finally:
+                lock.release()
+            if error:
+                self.send_text(500, error)
+            else:
+                self.send_text(200, "ok")
+
+        def log_message(self, format, *args):
+            pass  # keep the terminal for the progress of the refresh
+
+    if history_dir:
+        os.makedirs(history_dir, exist_ok=True)
+    print("Building the chart...", file=sys.stderr)
+    refresh()
+
+    # Only this computer can open the chart: it shows Jira data, fetched with your token
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    url = f"http://localhost:{port}/"
+    print(f"Serving the Gantt chart at {url} — press Ctrl+C to stop", file=sys.stderr)
+    if open_browser:
+        webbrowser.open(url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nStopped.", file=sys.stderr)
+    finally:
+        server.server_close()
+
+
 def parse_since(value):
     """Return the --since value as a date, or "last" when it is "last"."""
     if value == "last":
@@ -2450,6 +3220,18 @@ def build_parser():
                               help="show the changes since the latest snapshot on or before this date; "
                                    "without a date, since the latest snapshot before the current day")
 
+    serve_parser = subparsers.add_parser("serve", help="serve the Gantt chart on localhost, with a button to refresh it from Jira")
+    serve_parser.add_argument("-c", "--config", metavar="FILE", default="gantt.toml",
+                              help="planning configuration (default: gantt.toml)")
+    serve_parser.add_argument("--history", metavar="DIR",
+                              help="on each refresh, store a snapshot of the plan and the chart in DIR, and show "
+                                   "the changes and the trend from the snapshots there")
+    serve_parser.add_argument("--since", metavar="YYYY-MM-DD", nargs="?", const="last", type=parse_since,
+                              help="show the changes since the latest snapshot on or before this date; "
+                                   "without a date, since the latest snapshot before the current day")
+    serve_parser.add_argument("--port", metavar="N", type=int, default=8000, help="port to listen on (default: 8000)")
+    serve_parser.add_argument("--no-open", action="store_true", help="do not open the chart in the browser")
+
     velocity_parser = subparsers.add_parser("velocity", help="measure the hours per story point of the last weeks")
     velocity_parser.add_argument("-c", "--config", metavar="FILE", default="gantt.toml",
                                  help="planning configuration with the team (default: gantt.toml)")
@@ -2474,6 +3256,9 @@ def main():
         return
     if args.command == "velocity":
         run_velocity(args.config, args.weeks)
+        return
+    if args.command == "serve":
+        run_serve(args.config, args.history, args.since, args.port, not args.no_open)
         return
 
     output = open(args.output, "w", encoding="utf-8", newline="") if args.output else sys.stdout
