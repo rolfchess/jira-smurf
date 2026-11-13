@@ -29,6 +29,13 @@ holidays = [
     "2027-05-17",  # Whit Monday
     "2027-12-25",  # Christmas Day
     "2027-12-26",  # Boxing Day
+    "2028-01-01",  # New Year's Day
+    "2028-04-17",  # Easter Monday
+    "2028-04-27",  # King's Day
+    "2028-05-25",  # Ascension Day
+    "2028-06-05",  # Whit Monday
+    "2028-12-25",  # Christmas Day
+    "2028-12-26",  # Boxing Day
 ]
 
 [team]
