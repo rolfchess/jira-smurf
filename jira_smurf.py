@@ -2473,26 +2473,26 @@ function applyFilters() {{
   updateMemberCounts();
   showShownDates();
 }}
-// Show the dates of the shown stories at the chosen zoom level, or fit them when no level is chosen
+// Keep the timeline at the chosen zoom level, or fit it to the shown stories when no level is chosen
 function showShownDates() {{
   if (!chosenZoom) {{
     zoomToFit();
     gantt.render();
     return;
   }}
-  var project = shownDates();
-  if (!project.start_date || !project.end_date) {{
-    gantt.render();
-    return;
-  }}
-  // Keep the same day at the left edge of the timeline, if it is still in the range
+  // Keep the timeline and the day at its left edge. The timeline only grows, so stories that
+  // the filter shows again, such as done stories, are on it.
   var leftDate = gantt.dateFromPos(gantt.getScrollState().x);
-  gantt.config.start_date = project.start_date;
-  gantt.config.end_date = gantt.date.add(project.end_date, 1, "day");
-  setZoom(chosenZoom);
+  var project = shownDates();
+  if (project.start_date && project.start_date < gantt.config.start_date) {{
+    gantt.config.start_date = project.start_date;
+  }}
+  if (project.end_date) {{
+    var end = gantt.date.add(project.end_date, 1, "day");
+    if (end > gantt.config.end_date) gantt.config.end_date = end;
+  }}
   gantt.render();
-  var inRange = leftDate >= gantt.config.start_date && leftDate < gantt.config.end_date;
-  gantt.scrollTo(inRange ? gantt.posFromDate(leftDate) : 0, null);
+  gantt.scrollTo(gantt.posFromDate(leftDate), null);
 }}
 function shownDates() {{
   var start = null, end = null;
