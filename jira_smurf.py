@@ -1858,8 +1858,9 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
         for name, cls in status_classes.items()
     )
     status_css += "".join(
-        # One 4px stripe per color; a wider shadow lies under the narrower ones before it
-        f"\n  .gantt_row.{cls} .gantt_cell:first-child {{ box-shadow: "
+        # One 4px stripe per color; a wider shadow lies under the narrower ones before it. The padding
+        # keeps the icon and name 2px clear of the stripes, as dhtmlx's 6px does for one stripe.
+        f"\n  .gantt_row.{cls} .gantt_cell:first-child {{ padding-left: {4 * len(colors) + 2}px; box-shadow: "
         f"{', '.join(f'inset {4 * (i + 1)}px 0 0 {color}' for i, color in enumerate(colors))}; }}"
         for colors, cls in stripe_classes.items()
     )
