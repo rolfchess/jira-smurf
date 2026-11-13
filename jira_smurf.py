@@ -2173,7 +2173,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   <label id="show-done-wrap"><input type="checkbox" id="show-done" onchange="applyFilters()"> Show done stories</label>
   {changes_toggle}
   <div id="search-wrap">
-    <input id="search-input" type="search" placeholder="Search stories, for example PROJ-123" oninput="onSearchInput()" onkeydown="if(event.key==='Escape'){{this.value='';onSearchInput();}}">
+    <input id="search-input" type="search" placeholder="Search stories, for example PROJ-123" oninput="onSearchTyping()" onkeydown="if(event.key==='Escape'){{this.value='';clearTimeout(searchTimer);onSearchInput();}}">
     <span id="search-count"></span>
   </div>
 </div>
@@ -2566,24 +2566,37 @@ function onSearchInput() {{
   }}
   var firstMatchId = null;
   var matchCount = 0;
-  gantt.eachTask(function(task) {{
-    var hay = ((task.text || "") + " " + (task.story_key || "") + " " + (task.badges_text || "")).toLowerCase();
-    if (hay.indexOf(raw) !== -1) {{
+  var opened = {{}};
+  // Each gantt.open() redraws the chart, so open the epics of all matches in one batch
+  gantt.batchUpdate(function() {{
+    gantt.eachTask(function(task) {{
+      if (task.$search_text === undefined) {{
+        task.$search_text = ((task.text || "") + " " + (task.story_key || "") + " " +
+          (task.badges_text || "")).toLowerCase();
+      }}
+      if (task.$search_text.indexOf(raw) === -1) return;
       searchMatchIds[task.id] = true;
       searchVisibleIds[task.id] = true;
       matchCount++;
       if (firstMatchId === null) firstMatchId = task.id;
       var p = gantt.getParent(task.id);
-      while (p && p !== gantt.config.root_id) {{
+      while (p && p !== gantt.config.root_id && !opened[p]) {{
+        opened[p] = true;
         searchVisibleIds[p] = true;
         gantt.open(p);
         p = gantt.getParent(p);
       }}
-    }}
+    }});
   }});
   countEl.textContent = matchCount === 1 ? "1 match" : matchCount + " matches";
   gantt.refreshData();
   if (firstMatchId !== null) gantt.showTask(firstMatchId);
+}}
+// Search when the typing pauses, not on every key
+var searchTimer = null;
+function onSearchTyping() {{
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(onSearchInput, 150);
 }}
 gantt.templates.task_text = function(start, end, task) {{
   if (task.removed || task.roadmap) return task.text;
