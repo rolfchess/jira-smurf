@@ -729,9 +729,11 @@ def field_values(value):
         return [(text, None)] if text else []
     if isinstance(value, dict):
         for key in ("value", "displayName", "name"):
-            if value.get(key):
+            # An option with the value 0 is that value, the same as a number field holding 0
+            own = field_values(value.get(key)) if not isinstance(value.get(key), (dict, list)) else []
+            if own:
                 child = field_values(value.get("child"))
-                parent = str(value[key])
+                parent = own[0][0]
                 return [(f"{parent} > {child[0][0]}", parent) if child else (parent, None)]
         return []
     if value is True:
