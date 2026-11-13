@@ -181,7 +181,7 @@ support request, 🧹 technical debt and 📄 any other type. In the day view, w
 have a gray background. When a story or epic has a due date in Jira, the chart shows a red diamond
 on its row. The diamond is at the end of the due date. The bar of the epic will grow past the due
 date according to the planned stories. A story or epic that is not done and ends after its due date
-has a blinking red outline. Change it in `[visuals]`. When you print the chart or save it as PDF, the bars and row
+has a blinking red outline. Set its color and the blinking in `[visuals]`. When you print the chart or save it as PDF, the bars and row
 backgrounds keep their colors.
 
 ### Changes and trend
@@ -202,7 +202,7 @@ The checkbox "Show changes since …" in the toolbar turns these marks on and of
 - A thin gray bar under a story or epic shows its dates in the baseline.
 - The Moved column shows how many working days the end date moved.
 - A story that the baseline planned to be done by now, but that is still open, has a yellow outline.
-  If it also ends after its due date, the blinking red outline is shown instead.
+  If it also ends after its due date, it has the outline for a missed due date instead.
 - Open stories that are no longer in the plan are listed in a gray group at the end of the chart.
 
 Below the chart, a summary shows how far the plan end moved and why: new stories, changed estimates,

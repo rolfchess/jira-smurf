@@ -35,6 +35,8 @@ The tool has no version numbers yet. This file lists the changes per week, newes
 - Use the Story point estimate field when a story has no story points.
 - Remove the Rank column from the Gantt chart.
 - Remove the Sprint filter and the `order_epics_by_rank` and `assign_by_epic` settings.
+- Remove the blinking red outline on a story or epic that ends after its due date. This was not
+  on purpose, and it is back in the week of 2026-11-09.
   `use_backlog_order` now also orders the epic rows.
 
 ## Week of 2026-10-26
