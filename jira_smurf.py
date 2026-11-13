@@ -735,10 +735,18 @@ def field_values(value):
 
 
 def adf_text(node):
-    """Return the text in a rich text (ADF) node of Jira, with a space between its blocks."""
+    """Return the text in a rich text (ADF) node of Jira, with a space between its blocks.
+
+    The text nodes inside a block are joined without a space: ADF splits a word such as
+    "Pre" + bold "mium" into two text nodes wherever the formatting changes.
+    """
     if node.get("type") == "text":
         return node.get("text", "")
-    return " ".join(adf_text(child) for child in node.get("content", []) if isinstance(child, dict))
+    if node.get("type") == "hardBreak":
+        return " "
+    inner = "".join(adf_text(child) for child in node.get("content", []) if isinstance(child, dict))
+    # A block such as a paragraph, heading or list item has content; a space keeps it apart from the next
+    return f" {inner} " if "content" in node else inner
 
 
 BADGE_TEXT_LENGTH = 30  # a badge without a label cuts off longer field values; the tooltip has all of them
