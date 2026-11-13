@@ -2074,7 +2074,15 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   .gantt_task_line.roadmap-epic {{ opacity: 0.75;
     background-image: repeating-linear-gradient(45deg, rgba(255,255,255,0.45) 0 6px, transparent 6px 12px); }}
   .gantt_task_line.no-bar {{ display: none; }}
-  .gantt_task_line.change-late {{ box-shadow: 0 0 0 2px #d62728; }}
+  .gantt_task_line.change-late {{ box-shadow: 0 0 0 2px #f2c200, 0 0 6px 3px rgba(242, 194, 0, 0.6); }}
+  .gantt_task_line.due-late {{ box-shadow: 0 0 0 2px #d62728; animation: due-late-glow 0.5s ease-in-out infinite; }}
+  @keyframes due-late-glow {{
+    0%, 100% {{ box-shadow: 0 0 0 2px #d62728, 0 0 2px 1px rgba(214, 39, 40, 0.3); }}
+    50% {{ box-shadow: 0 0 0 2px #d62728, 0 0 8px 4px rgba(214, 39, 40, 0.6); }}
+  }}
+  @media (prefers-reduced-motion: reduce) {{
+    .gantt_task_line.due-late {{ animation: none; }}
+  }}
   .delta-up {{ color: #c62828; font-weight: 600; }}
   .delta-down {{ color: #2e7d32; font-weight: 600; }}
   .due-marker {{ position: absolute; width: 10px; height: 10px; background: #d62728; border: 1px solid #fff;
@@ -2458,6 +2466,11 @@ function zoomToFit() {{
 var searchTerm = "";
 var searchMatchIds = {{}};      // {{taskId: true}} for tasks whose own text matches
 var searchVisibleIds = {{}};    // {{taskId: true}} for matches + their ancestors (kept un-dimmed)
+function endsAfterDueDate(task) {{
+  if (!task.due_date) return false;
+  var dayAfterDue = gantt.date.add(gantt.date.str_to_date("%Y-%m-%d")(task.due_date), 1, "day");
+  return task.end_date > dayAfterDue;
+}}
 function changeBarClass(task) {{
   if (!showChanges) return "";
   if (task.removed) return " change-removed";
@@ -2472,7 +2485,10 @@ function joinClasses() {{
   return Array.prototype.filter.call(arguments, Boolean).join(" ");
 }}
 gantt.templates.task_class = function(start, end, task) {{
-  var base = (task.progress >= 1 ? "clickable-task task-done" : "clickable-task") + changeBarClass(task) +
+  // Red for ending after the due date wins over yellow for being behind the baseline
+  var pastDueDate = !task.removed && task.progress < 1 && endsAfterDueDate(task);
+  var base = (task.progress >= 1 ? "clickable-task task-done" : "clickable-task") +
+    (pastDueDate ? " due-late" : changeBarClass(task)) +
     (task.roadmap ? " roadmap-epic" : "") + (task.no_bar ? " no-bar" : "");
   if (!searchTerm) return base;
   if (searchMatchIds[task.id]) return base + " search-match";

@@ -19,6 +19,8 @@ The tool has no version numbers yet. This file lists the changes per week, newes
 - Add the `exclude` setting, to leave single stories or whole projects out of the Gantt chart.
 - Show the stories without an epic at the top of the Gantt chart, without a bar for the group.
 - Keep the bar colors and row backgrounds when you print the Gantt chart.
+- Restore the blinking red outline on a story or epic that ends after its due date.
+- Show a story that is behind the baseline with a yellow outline, not a red one.
 
 ## Week of 2026-11-02
 
@@ -48,6 +50,7 @@ The tool has no version numbers yet. This file lists the changes per week, newes
 - Plan in the order of the Jira backlog with `use_backlog_order`.
 - Plan started stories and stories in the active sprint before the rest of the backlog.
 - Show a red diamond on the due date of a story or epic.
+- Show a blinking red outline on a story or epic that ends after its due date.
 - Show an epic without stories as a bar from its Start date to its Due date in Jira.
 - Use Jira links of the types in `dependency_links` as dependencies, and draw them as arrows.
 - Show the Jira issue type icons in the Story column.
