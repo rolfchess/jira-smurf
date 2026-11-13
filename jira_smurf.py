@@ -708,30 +708,32 @@ def find_start_date_field(jira_fields):
 
 
 def field_values(value):
-    """Return the value of a Jira field as a list of texts, or [] when the field is empty.
+    """Return the value of a Jira field as a list of (text, parent), or [] when the field is empty.
 
     This handles text, numbers, checkboxes and select lists (options with a "value"),
     cascading selects (an option with a "child" option, as "Parent > Child"),
     users (with a "displayName"), other objects with a "name", and rich text (an ADF document).
+    parent is the parent option of a cascading select, and None for any other value.
     """
     if value is None or value is False or value == "":
         return []
     if isinstance(value, list):
-        return [text for item in value for text in field_values(item)]
+        return [item_value for item in value for item_value in field_values(item)]
     if isinstance(value, dict) and value.get("type") == "doc":
         text = " ".join(adf_text(value).split())
-        return [text] if text else []
+        return [(text, None)] if text else []
     if isinstance(value, dict):
         for key in ("value", "displayName", "name"):
             if value.get(key):
                 child = field_values(value.get("child"))
-                return [f"{value[key]} > {child[0]}" if child else str(value[key])]
+                parent = str(value[key])
+                return [(f"{parent} > {child[0][0]}", parent) if child else (parent, None)]
         return []
     if value is True:
-        return ["Yes"]
+        return [("Yes", None)]
     if isinstance(value, float) and value.is_integer():
-        return [str(int(value))]  # Jira gives numbers as floats; show 5, not 5.0
-    return [str(value)]
+        return [(str(int(value)), None)]  # Jira gives numbers as floats; show 5, not 5.0
+    return [(str(value), None)]
 
 
 def adf_text(node):
@@ -776,7 +778,8 @@ def epic_badges(fields, badges, field_names):
     tooltip does not show it.
     """
     def matches(value, texts):
-        return value.lower() in texts or value.split(" > ", 1)[0].lower() in texts
+        text, parent = value
+        return text.lower() in texts or (parent is not None and parent.lower() in texts)
 
     result = []
     for badge in badges:
@@ -785,6 +788,7 @@ def epic_badges(fields, badges, field_names):
             values = [v for v in values if matches(v, badge["values"])]
         else:
             values = [v for v in values if not matches(v, NO_BADGE_VALUES)]
+        values = [text for text, _ in values]
         if not values:
             continue
         name = field_names.get(badge["field"], badge["field"])
