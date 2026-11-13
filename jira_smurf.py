@@ -1638,8 +1638,10 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
         stripes = tuple(dict.fromkeys(b["color"] for b in badges if b["stripe"]))
         if stripes and stripes not in stripe_classes:
             stripe_classes[stripes] = f"badge-stripe-{len(stripe_classes)}"
-        # The search box also finds an epic by its badges, also by the part a badge cuts off
-        search_text = " ".join(f"{b['search']} {b['title']}" for b in badges)
+        # The search box also finds an epic by the label and values of its badges, also by the part
+        # a badge cuts off. Not by the field name in the tooltip: a word such as "feature" in it
+        # would match every epic with that badge.
+        search_text = " ".join(b["search"] for b in badges)
         return {"badges_html": pills, "badges_text": search_text, "stripe_class": stripe_classes.get(stripes, "")}
 
     # Create a parent task per epic
