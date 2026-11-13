@@ -74,7 +74,7 @@ auto_assign = false
 # This setting is optional. Stories with one of these Jira statuses get this background color on their row.
 "Blocked" = "#ffcccc"
 
-# This setting is optional. Each [[badges]] table puts a badge after the name of every epic
+# This setting is optional. Each [[badges]] table puts a badge before the name of every epic
 # where a Jira field has a value, for example a "Paid Feature" checkbox.
 # Field IDs differ per Jira site. Find the ID under Jira settings → Issues → Custom fields
 # (open the field; the URL has id=10410, so the ID is customfield_10410), or at /rest/api/3/field.
@@ -83,6 +83,7 @@ field = "customfield_10410"  # the Jira field ID
 label = "Paid"               # optional: the text on the badge; without it the badge shows the field's values
 color = "#d9a520"            # optional: a CSS color, amber by default
 stripe = true                # optional: also a stripe in this color on the left of the epic row
+values = ["Yes"]             # optional: only these field values give the badge; without it any value but "No", "False" or 0
 
 [epics]
 # All stories of these epics are planned, in this order.

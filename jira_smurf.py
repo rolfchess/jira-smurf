@@ -17,7 +17,7 @@ import sys
 import threading
 import webbrowser
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 try:
     import tomllib
@@ -403,6 +403,9 @@ def load_gantt_config(path="gantt.toml"):
 
 
 DEFAULT_BADGE_COLOR = "#d9a520"  # amber, so a badge does not look like the orange "over the estimate" badge
+# Without 'values', a badge ignores these field values, so a Yes/No select set to "No"
+# or a number field set to 0 gives no badge
+NO_BADGE_VALUES = {"no", "false", "0"}
 
 
 def is_css_color(value):
@@ -411,16 +414,17 @@ def is_css_color(value):
 
 
 def parse_badges(badges_raw, path):
-    """Return the [[badges]] of the configuration as [{field, label, color, stripe}, ...].
+    """Return the [[badges]] of the configuration as [{field, label, color, stripe, values}, ...].
 
     Each badge marks the epic rows where a Jira field, such as a "Paid Feature" checkbox, has a value.
+    values are the lowercase field values that give the badge, or [] for any value but "No", "False" or 0.
     """
     if not isinstance(badges_raw, list) or not all(isinstance(b, dict) for b in badges_raw):
         print(f"Error: badges in {path} must be a list of [[badges]] tables", file=sys.stderr)
         sys.exit(1)
     badges = []
     for i, badge in enumerate(badges_raw, 1):
-        unknown = set(badge) - {"field", "label", "color", "stripe"}
+        unknown = set(badge) - {"field", "label", "color", "stripe", "values"}
         if unknown:
             print(f"Error: [[badges]] number {i} in {path} has unknown settings: {', '.join(sorted(unknown))}",
                   file=sys.stderr)
@@ -443,7 +447,18 @@ def parse_badges(badges_raw, path):
         if not isinstance(stripe, bool):
             print(f"Error: 'stripe' of badge {field} must be true or false, got {stripe!r}", file=sys.stderr)
             sys.exit(1)
-        badges.append({"field": field.strip(), "label": label.strip(), "color": color, "stripe": stripe})
+        values = badge.get("values", [])
+        if "values" in badge and values == []:
+            # Not "any value", which is what leaving 'values' out means
+            print(f"Error: 'values' of badge {field} is empty, so no value could give the badge. "
+                  f"List the values that give it, or leave 'values' out for any value", file=sys.stderr)
+            sys.exit(1)
+        if not isinstance(values, list) or not all(isinstance(v, str) and v.strip() for v in values):
+            print(f"Error: 'values' of badge {field} must be a list of texts such as [\"Yes\"], got {values!r}",
+                  file=sys.stderr)
+            sys.exit(1)
+        badges.append({"field": field.strip(), "label": label.strip(), "color": color, "stripe": stripe,
+                       "values": [v.strip().lower() for v in values]})
     return badges
 
 
@@ -680,10 +695,12 @@ def link_dependencies(issues, link_types):
 
 
 def fetch_jira_fields():
-    """Return the list of all Jira fields, or [] if Jira does not give it."""
+    """Return the list of all Jira fields, or [] with a warning if Jira does not give it."""
     try:
         return jira_get("field")
-    except requests.RequestException:
+    except requests.RequestException as e:
+        print(f"Warning: could not read the list of Jira fields ({e}), so epics get no start date, "
+              f"badge fields are not checked and badge tooltips show field IDs", file=sys.stderr)
         return []
 
 
@@ -696,40 +713,100 @@ def find_start_date_field(jira_fields):
 
 
 def field_values(value):
-    """Return the value of a Jira field as a list of texts, or [] when the field is empty.
+    """Return the value of a Jira field as a list of (text, parent), or [] when the field is empty.
 
     This handles text, numbers, checkboxes and select lists (options with a "value"),
-    users (with a "displayName") and other objects with a "name".
+    cascading selects (an option with a "child" option, as "Parent > Child"),
+    users (with a "displayName"), other objects with a "name", and rich text (an ADF document).
+    parent is the parent option of a cascading select, and None for any other value.
     """
     if value is None or value is False or value == "":
         return []
     if isinstance(value, list):
-        return [text for item in value for text in field_values(item)]
+        return [item_value for item in value for item_value in field_values(item)]
+    if isinstance(value, dict) and value.get("type") == "doc":
+        text = " ".join(adf_text(value).split())
+        return [(text, None)] if text else []
     if isinstance(value, dict):
         for key in ("value", "displayName", "name"):
-            if value.get(key):
-                return [str(value[key])]
+            # An option with the value 0 is that value, the same as a number field holding 0
+            own = field_values(value.get(key)) if not isinstance(value.get(key), (dict, list)) else []
+            if own:
+                child = field_values(value.get("child"))
+                parent = own[0][0]
+                return [(f"{parent} > {child[0][0]}", parent) if child else (parent, None)]
         return []
     if value is True:
-        return ["Yes"]
-    return [str(value)]
+        return [("Yes", None)]
+    if isinstance(value, float) and value.is_integer():
+        return [(str(int(value)), None)]  # Jira gives numbers as floats; show 5, not 5.0
+    return [(str(value), None)]
+
+
+def adf_text(node):
+    """Return the text in a rich text (ADF) node of Jira, with a space between its blocks.
+
+    The text nodes inside a block are joined without a space: ADF splits a word such as
+    "Pre" + bold "mium" into two text nodes wherever the formatting changes.
+    Mentions, emoji, statuses, dates and links keep their text in their attrs.
+    """
+    kind, attrs = node.get("type"), node.get("attrs") or {}
+    if kind == "text":
+        return node.get("text", "")
+    if kind == "hardBreak":
+        return " "
+    if kind in ("mention", "emoji", "status"):
+        return str(attrs.get("text") or attrs.get("shortName") or "")
+    if kind == "date":
+        try:
+            # The timestamp is midnight UTC of the date
+            return datetime.fromtimestamp(int(attrs.get("timestamp")) / 1000, timezone.utc).date().isoformat()
+        except (TypeError, ValueError, OverflowError, OSError):
+            return ""
+    if kind in ("inlineCard", "blockCard", "embedCard"):
+        return f" {attrs.get('url', '')} "
+    inner = "".join(adf_text(child) for child in node.get("content", []) if isinstance(child, dict))
+    # A block such as a paragraph, heading or list item has content; a space keeps it apart from the next
+    return f" {inner} " if "content" in node else inner
+
+
+BADGE_TEXT_LENGTH = 30  # a badge without a label cuts off longer field values; the tooltip has all of them
 
 
 def epic_badges(fields, badges, field_names):
-    """Return the badges for an epic with these Jira fields, as [{text, title, color, stripe}, ...].
+    """Return the badges for an epic with these Jira fields, as [{text, title, search, color, stripe}, ...].
 
-    An epic gets a badge when the field of that badge has a value. The badge shows its label,
-    or the values of the field when it has no label.
+    search is the label and the field values in full, for the search box.
+
+    An epic gets a badge when the field of that badge has a value: one of the 'values' of the badge,
+    or without 'values' any value but "No", "False" or 0. A value "Parent > Child" of a cascading
+    select also matches on its parent alone. The badge shows its label, or those values of the field
+    when it has no label, cut off at BADGE_TEXT_LENGTH. The label is never cut off, because the
+    tooltip does not show it.
     """
+    def matches(value, texts):
+        text, parent = value
+        return text.lower() in texts or (parent is not None and parent.lower() in texts)
+
     result = []
     for badge in badges:
         values = field_values(fields.get(badge["field"]))
+        if badge["values"]:
+            values = [v for v in values if matches(v, badge["values"])]
+        else:
+            values = [v for v in values if not matches(v, NO_BADGE_VALUES)]
+        values = [text for text, _ in values]
         if not values:
             continue
         name = field_names.get(badge["field"], badge["field"])
+        text = ", ".join(values)
+        if len(text) > BADGE_TEXT_LENGTH:
+            text = text[:BADGE_TEXT_LENGTH - 1].rstrip() + "…"
+        text = badge["label"] or text
         result.append({
-            "text": badge["label"] or ", ".join(values),
+            "text": text,
             "title": f"{name}: {', '.join(values)}",
+            "search": f"{badge['label']} {', '.join(values)}".strip(),
             "color": badge["color"],
             "stripe": badge["stripe"],
         })
@@ -1554,20 +1631,25 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     row_names = [row if kind == "stories" else row["name"] for kind, row in epic_rows]
     epic_color_map = {name: EPIC_COLORS[i % len(EPIC_COLORS)] for i, name in enumerate(row_names)}
 
-    # The [[badges]] of an epic: pills after its name, and a stripe on the left of its row.
-    # Each stripe color has one CSS class.
+    # The [[badges]] of an epic: pills before its name, so a long name does not push them out of
+    # the Story column, and stripes on the left of its row, side by side when several badges have one.
+    # Each combination of stripe colors has one CSS class.
     stripe_classes = {}
 
     def badge_fields(epic_key):
         badges = epics_info.get(epic_key, {}).get("badges", [])
         pills = "".join(
-            f" <span class='field-badge' style='--badge-color: {b['color']}' "
+            f"<span class='field-badge' style='--badge-color: {b['color']}' "
             f"title='{html.escape(b['title'])}'>{html.escape(b['text'])}</span>"
             for b in badges)
-        stripe = next((b["color"] for b in badges if b["stripe"]), None)
-        if stripe and stripe not in stripe_classes:
-            stripe_classes[stripe] = f"badge-stripe-{len(stripe_classes)}"
-        return {"badges_html": pills, "stripe_class": stripe_classes.get(stripe, "")}
+        stripes = tuple(dict.fromkeys(b["color"] for b in badges if b["stripe"]))
+        if stripes and stripes not in stripe_classes:
+            stripe_classes[stripes] = f"badge-stripe-{len(stripe_classes)}"
+        # The search box also finds an epic by the label and values of its badges, also by the part
+        # a badge cuts off. Not by the field name in the tooltip: a word such as "feature" in it
+        # would match every epic with that badge.
+        search_text = " ".join(b["search"] for b in badges)
+        return {"badges_html": pills, "badges_text": search_text, "stripe_class": stripe_classes.get(stripes, "")}
 
     # Create a parent task per epic
     for kind, row in epic_rows:
@@ -1785,8 +1867,11 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
         for name, cls in status_classes.items()
     )
     status_css += "".join(
-        f"\n  .gantt_row.{cls} .gantt_cell:first-child {{ box-shadow: inset 4px 0 0 {color}; }}"
-        for color, cls in stripe_classes.items()
+        # One 4px stripe per color; a wider shadow lies under the narrower ones before it. The padding
+        # keeps the icon and name 2px clear of the stripes, as dhtmlx's 6px does for one stripe.
+        f"\n  .gantt_row.{cls} .gantt_cell:first-child {{ padding-left: {4 * len(colors) + 2}px; box-shadow: "
+        f"{', '.join(f'inset {4 * (i + 1)}px 0 0 {color}' for i, color in enumerate(colors))}; }}"
+        for colors, cls in stripe_classes.items()
     )
 
     print(f"""<!DOCTYPE html>
@@ -1854,7 +1939,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   .impl-badge.impl-over {{ border-color: #f0c08a; background: #fdf1e3; color: #9a5a12; }}
   /* A [[badges]] pill on an epic row, in a light and a dark shade of the color of the badge */
   .field-badge {{
-    display: inline-block; margin-left: 4px; padding: 0 5px; border-radius: 7px;
+    display: inline-block; margin-right: 4px; padding: 0 5px; border-radius: 7px;
     border: 1px solid color-mix(in srgb, var(--badge-color) 55%, #fff);
     background: color-mix(in srgb, var(--badge-color) 15%, #fff);
     color: color-mix(in srgb, var(--badge-color) 65%, #000);
@@ -2026,8 +2111,9 @@ gantt.config.columns = [
       var image = typeIconImages[task.icon_url];
       var icon = image ? "<img class='type-icon' src='" + image + "' alt=''>" :
         task.icon ? "<span class='type-icon'>" + task.icon + "</span>" : "";
-      return icon + "<span title='" + task.text.replace(/'/g, "&#39;") + "'>" + task.text + "</span>" +
-        (task.badges_html || "");
+      // The badges come before the name, so a long name does not hide them
+      return icon + (task.badges_html || "") +
+        "<span title='" + task.text.replace(/'/g, "&#39;") + "'>" + task.text + "</span>";
     }} }},
   {{name: "status", label: "Status", align: "left", width: 120, resize: true}},
   {{name: "points", label: "Points", align: "center", width: 70, resize: true,
@@ -2340,7 +2426,7 @@ function onSearchInput() {{
   var firstMatchId = null;
   var matchCount = 0;
   gantt.eachTask(function(task) {{
-    var hay = ((task.text || "") + " " + (task.story_key || "")).toLowerCase();
+    var hay = ((task.text || "") + " " + (task.story_key || "") + " " + (task.badges_text || "")).toLowerCase();
     if (hay.indexOf(raw) !== -1) {{
       searchMatchIds[task.id] = true;
       searchVisibleIds[task.id] = true;

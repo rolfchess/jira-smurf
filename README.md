@@ -106,7 +106,7 @@ example.
 | `days_off`               | This is set per team member. It is a list of days off, for example `["2026-12-10", "2026-12-18 to 2027-01-01"]`. A range includes both days. No work is planned on those days. |
 | `[statuses]`             | Progress in percent for each Jira status. A story at 100 is done.                                                                                                              |
 | `[status_colors]`        | This sets a row background color for each Jira status, for example `"Blocked" = "#ffcccc"`.                                                                                    |
-| `[[badges]]`             | This setting is optional. Each `[[badges]]` table marks the epics where a Jira field has a value, for example a "Paid Feature" checkbox. `field` is the Jira field ID, such as `"customfield_10410"`. `label` is the text on the badge; without it, the badge shows the values of the field. `color` is a CSS color, amber (`"#d9a520"`) by default. `stripe = true` also draws a stripe in that color on the left of the epic row. Only epic rows get badges, not their stories. |
+| `[[badges]]`             | This setting is optional. Each `[[badges]]` table marks the epics where a Jira field has a value, for example a "Paid Feature" checkbox. `field` is the Jira field ID, such as `"customfield_10410"`. `label` is the text on the badge; without it, the badge shows the values of the field. `color` is a CSS color, amber (`"#d9a520"`) by default. `stripe = true` also draws a stripe in that color on the left of the epic row; an epic with several such badges gets their stripes side by side. A field set to "No", "False" or 0, such as a Yes/No select or a number field, counts as not set. `values`, such as `["Yes", "Partly"]`, gives the badge only for those values of the field (not case-sensitive). A cascading select shows as `Parent > Child`, and its parent alone also matches `values`. Only epic rows get badges, not their stories. |
 | `[epics.KEY]`            | Plan all stories of this epic.                                                                                                                                                 |
 | `[stories.KEY]`          | Plan this story. `depends_on = ["KEY"]` makes it start after the listed stories finish.                                                                                        |
 
@@ -156,7 +156,7 @@ How the planning works:
   first change to a status with progress above 0. It ends on the last change to a status at 100. A
   done story without such a change is placed at the start of the plan.
 
-In the chart you can zoom, search for a story and show or hide done stories. Done stories are hidden
+In the chart you can zoom, search for a story (or for an epic by its badges) and show or hide done stories. Done stories are hidden
 at first. Click a team member badge above the table to show only the stories of that member. You can
 select more than one member, and "Unassigned". The epic rows then show the points of the stories
 that are shown. The Points and Sprint columns show the story points and the number of
