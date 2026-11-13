@@ -23,6 +23,7 @@ The tool has no version numbers yet. This file lists the changes per week, newes
 - Show a story that is behind the baseline with a yellow outline, not a red one.
 - Add the optional `[visuals]` section to `gantt.toml`, with `past_due_blink` to stop the blinking
   and `past_due_color` to set the color of the outline of a story that ends after its due date.
+- Add the holidays of 2028 to `gantt.example.toml`.
 
 ## Week of 2026-11-02
 
