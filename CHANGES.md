@@ -26,6 +26,7 @@ The tool has no version numbers yet. This file lists the changes per week, newes
 - Add the holidays of 2028 to `gantt.example.toml`.
 - Make the search box of the Gantt chart faster. It searches when the typing pauses, and it
   redraws the chart once per search, not once per match.
+- Keep the scale you picked in the Gantt chart when you filter on a team member or show done stories.
 
 ## Week of 2026-11-02
 
