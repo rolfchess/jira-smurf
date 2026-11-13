@@ -745,7 +745,9 @@ BADGE_TEXT_LENGTH = 30  # a badge without a label cuts off longer field values; 
 
 
 def epic_badges(fields, badges, field_names):
-    """Return the badges for an epic with these Jira fields, as [{text, title, color, stripe}, ...].
+    """Return the badges for an epic with these Jira fields, as [{text, title, search, color, stripe}, ...].
+
+    search is the label and the field values in full, for the search box.
 
     An epic gets a badge when the field of that badge has a value: one of the 'values' of the badge,
     or without 'values' any value but "No", "False" or 0. A value "Parent > Child" of a cascading
@@ -773,6 +775,7 @@ def epic_badges(fields, badges, field_names):
         result.append({
             "text": text,
             "title": f"{name}: {', '.join(values)}",
+            "search": f"{badge['label']} {', '.join(values)}".strip(),
             "color": badge["color"],
             "stripe": badge["stripe"],
         })
@@ -1611,8 +1614,8 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
         stripes = tuple(dict.fromkeys(b["color"] for b in badges if b["stripe"]))
         if stripes and stripes not in stripe_classes:
             stripe_classes[stripes] = f"badge-stripe-{len(stripe_classes)}"
-        # The search box also finds an epic by the text and tooltip of its badges
-        search_text = " ".join(f"{b['text']} {b['title']}" for b in badges)
+        # The search box also finds an epic by its badges, also by the part a badge cuts off
+        search_text = " ".join(f"{b['search']} {b['title']}" for b in badges)
         return {"badges_html": pills, "badges_text": search_text, "stripe_class": stripe_classes.get(stripes, "")}
 
     # Create a parent task per epic
