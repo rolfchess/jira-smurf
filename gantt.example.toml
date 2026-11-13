@@ -87,6 +87,7 @@ auto_assign = false
 # Optional display settings. Omitted values use their defaults.
 past_due_blink = true         # blink the outline of overdue stories and epics
 past_due_color = "#d62728"    # CSS color of the overdue outline; defaults to red
+behind_baseline_color = "#f2c200"  # CSS color of the outline of a story behind the baseline; defaults to yellow
 
 # Optional: add one [[badges]] table for each Jira field to mark on epics.
 # Field IDs vary by Jira site. Find the field under Jira settings → Issues → Custom fields.

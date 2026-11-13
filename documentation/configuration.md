@@ -60,7 +60,12 @@ Map every relevant Jira status to progress from 0 to 100. A story at 100 is done
 [visuals]
 past_due_blink = false
 past_due_color = "#d62728"
+behind_baseline_color = "#f2c200"
 ```
+
+All `[visuals]` settings are optional. `past_due_blink` and `past_due_color` set the outline of a
+story or epic that ends after its due date: blinking and red by default. `behind_baseline_color`
+sets the outline of a story that is behind the baseline: yellow by default.
 
 ## Epic badges
 

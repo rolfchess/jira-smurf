@@ -26,6 +26,8 @@ The tool has no version numbers yet. This file lists the changes per week, newes
 - Add the holidays of 2028 to `gantt.example.toml`.
 - Make the search box of the Gantt chart faster. It searches when the typing pauses, and it
   redraws the chart once per search, not once per match.
+- Add `behind_baseline_color` to `[visuals]`, to set the color of the outline of a story that is
+  behind the baseline. The default is yellow.
 
 ## Week of 2026-11-02
 

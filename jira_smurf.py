@@ -199,7 +199,7 @@ class GanttConfig:
     implementation_status: str  # status where open stories show their days of work in a badge, "" if not set
     exclude: list  # [key or project key, ...] — uppercase; stories that match are left out of the chart
     badges: list  # [{field, label, color, stripe}, ...] — badges on epic rows where a Jira field is set
-    visuals: dict  # {past_due_blink: bool, past_due_color: css_color} — how the chart looks
+    visuals: dict  # {past_due_blink: bool, past_due_color: css_color, behind_baseline_color: css_color}
 
 
 def is_excluded(key, exclude):
@@ -494,11 +494,11 @@ def parse_badges(badges_raw, path):
     return badges
 
 
-DEFAULT_VISUALS = {"past_due_blink": True, "past_due_color": "#d62728"}
+DEFAULT_VISUALS = {"past_due_blink": True, "past_due_color": "#d62728", "behind_baseline_color": "#f2c200"}
 
 
 def parse_visuals(visuals_raw, path):
-    """Return the [visuals] of the configuration as {past_due_blink, past_due_color}.
+    """Return the [visuals] of the configuration as {past_due_blink, past_due_color, behind_baseline_color}.
 
     Each setting is optional and has the value of DEFAULT_VISUALS when it is left out.
     """
@@ -514,10 +514,11 @@ def parse_visuals(visuals_raw, path):
         print(f"Error: 'past_due_blink' in [visuals] must be true or false, got {visuals['past_due_blink']!r}",
               file=sys.stderr)
         sys.exit(1)
-    if not is_css_color(visuals["past_due_color"]):
-        print(f"Error: 'past_due_color' in [visuals] must be a CSS color such as \"#d62728\", "
-              f"got {visuals['past_due_color']!r}", file=sys.stderr)
-        sys.exit(1)
+    for name in ("past_due_color", "behind_baseline_color"):
+        if not is_css_color(visuals[name]):
+            print(f"Error: '{name}' in [visuals] must be a CSS color such as \"{DEFAULT_VISUALS[name]}\", "
+                  f"got {visuals[name]!r}", file=sys.stderr)
+            sys.exit(1)
     return visuals
 
 
@@ -1978,6 +1979,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     # The outline of a story or epic that ends after its due date, blinking or not
     visuals = visuals or DEFAULT_VISUALS
     past_due = visuals["past_due_color"]
+    behind = visuals["behind_baseline_color"]
     past_due_css = (f"  .gantt_task_line.due-late {{ box-shadow: 0 0 0 2px {past_due}, "
                     f"0 0 6px 3px color-mix(in srgb, {past_due} 45%, transparent); }}")
     if visuals["past_due_blink"]:
@@ -2120,7 +2122,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   .gantt_task_line.roadmap-epic {{ opacity: 0.75;
     background-image: repeating-linear-gradient(45deg, rgba(255,255,255,0.45) 0 6px, transparent 6px 12px); }}
   .gantt_task_line.no-bar {{ display: none; }}
-  .gantt_task_line.change-late {{ box-shadow: 0 0 0 2px #f2c200, 0 0 6px 3px rgba(242, 194, 0, 0.6); }}
+  .gantt_task_line.change-late {{ box-shadow: 0 0 0 2px {behind}, 0 0 6px 3px color-mix(in srgb, {behind} 60%, transparent); }}
 {past_due_css}
   .delta-up {{ color: #c62828; font-weight: 600; }}
   .delta-down {{ color: #2e7d32; font-weight: 600; }}
