@@ -1,19 +1,19 @@
-# Example planning configuration for `jira_smurf.py gantt`.
-# Copy this file to gantt.toml and change it to match your team and project.
+# Example configuration for `jira_smurf.py gantt`.
+# Copy this file to gantt.toml, then adapt it to your project and team.
 
-start_date = "2026-01-05"       # first day of the planning, YYYY-MM-DD
-default_hours = 40              # hours for stories without story point estimates
+start_date = "2026-01-05"       # first day in the plan, YYYY-MM-DD
+default_hours = 40              # estimate for stories without points
 velocity = 8.0                  # hours per story point
-include_open_sprints = false    # also add all stories in the active sprint
-include_future_sprints = false  # also add all stories in future sprints
-work_starts_at = "In Progress"  # a done story's bar starts at this status or a later one
-implementation_status = "Implementation"  # open stories show the days spent in this status or later
-use_backlog_order = true        # plan stories in Jira backlog order, not in the order of this file
-dependency_links = ["Blocks"]   # Jira link types that make a story wait for another
-auto_assign = true              # false plans stories without a Jira assignee under "Unassigned"
-exclude = []                    # stories to leave out: a project key such as "DTICARCH" or a full key such as "ACME-123"
+include_open_sprints = false    # include every story in the active sprint
+include_future_sprints = false  # include every story in future sprints
+work_starts_at = "In Progress"  # start completed work at this status or a later one
+implementation_status = "Implementation"  # track time spent at this status or later
+use_backlog_order = true        # use Jira backlog order instead of the order below
+dependency_links = ["Blocks"]   # Jira link types treated as dependencies
+auto_assign = true              # set false to put unassigned work under "Unassigned"
+exclude = []                    # omit project keys or issue keys, such as "DTICARCH" or "ACME-123"
 
-# These are days off for the whole team, written as YYYY-MM-DD.
+# Days on which the whole team is unavailable, in YYYY-MM-DD format.
 holidays = [
     "2026-01-01",  # New Year's Day
     "2026-04-06",  # Easter Monday
@@ -32,13 +32,11 @@ holidays = [
 ]
 
 [team]
-# Each member has hours per weekday. The name must match the display name in Jira.
-# Set auto_assign = false to keep a member out of auto-assigning. Such a member may have no hours.
-# List vacation days and other days off in days_off, as YYYY-MM-DD. The member works 0 hours on those days.
-# Write "YYYY-MM-DD to YYYY-MM-DD" for a range. A range includes both days.
-# List the periods a member is in the team in in_team. Leave a side empty for an open end:
-# "2026-09-01 to" has no end, and "to 2026-06-30" has no start. Without in_team, the member is
-# always in the team.
+# Use each member's Jira display name and set their hours per weekday.
+# Set auto_assign = false to exclude a member from automatic assignment. Hours are then optional.
+# In days_off, use YYYY-MM-DD or an inclusive "YYYY-MM-DD to YYYY-MM-DD" range.
+# In in_team, list membership periods. Leave either date open when needed: "2026-09-01 to" or
+# "to 2026-06-30". Without in_team, the member is always part of the team.
 [team."Alice Baker"]
 mon = 8
 tue = 8
@@ -53,7 +51,7 @@ tue = 8
 wed = 0
 thu = 8
 fri = 8
-in_team = ["to 2026-06-30", "2026-09-01 to"]   # left the team for the summer
+in_team = ["to 2026-06-30", "2026-09-01 to"]   # away for the summer
 
 [team."Carol Dixon"]
 mon = 4
@@ -64,7 +62,7 @@ fri = 4
 auto_assign = false
 
 [statuses]
-# Progress in percent for each Jira status. A story at 100 is done.
+# Map Jira statuses to progress percentages. A story at 100 is done.
 "To Do" = 0
 "Refinement" = 1
 "Ready for Development" = 5
@@ -75,33 +73,32 @@ auto_assign = false
 "Done" = 100
 
 [status_colors]
-# This setting is optional. Stories with one of these Jira statuses get this background color on their row.
+# Optional row colors for selected Jira statuses.
 "Blocked" = "#ffcccc"
 
 [visuals]
-# This section is optional. Each setting in it is optional and has a default.
-past_due_blink = true         # a story or epic that ends after its due date has a blinking outline; false keeps it still
-past_due_color = "#d62728"    # a CSS color for that outline, red by default
+# Optional display settings. Omitted values use their defaults.
+past_due_blink = true         # blink the outline of overdue stories and epics
+past_due_color = "#d62728"    # CSS color of the overdue outline; defaults to red
 
-# This setting is optional. Each [[badges]] table puts a badge before the name of every epic
-# where a Jira field has a value, for example a "Paid Feature" checkbox.
-# Field IDs differ per Jira site. Find the ID under Jira settings → Issues → Custom fields
-# (open the field; the URL has id=10410, so the ID is customfield_10410), or at /rest/api/3/field.
+# Optional: add one [[badges]] table for each Jira field to mark on epics.
+# Field IDs vary by Jira site. Find the field under Jira settings → Issues → Custom fields.
+# An URL ending in id=10410 identifies customfield_10410. You can also use /rest/api/3/field.
 [[badges]]
-field = "customfield_10410"  # the Jira field ID
-label = "Paid"               # optional: the text on the badge; without it the badge shows the field's values
-color = "#d9a520"            # optional: a CSS color, amber by default
-stripe = true                # optional: also a stripe in this color on the left of the epic row
-values = ["Yes"]             # optional: only these field values give the badge; without it any value but "No", "False" or 0
+field = "customfield_10410"  # required Jira field ID
+label = "Paid"               # optional label; defaults to the field value
+color = "#d9a520"            # optional CSS color; defaults to amber
+stripe = true                # also mark the left edge of the epic row
+values = ["Yes"]             # optional matching values; by default, any value except "No", "False", or 0
 
 [epics]
-# All stories of these epics are planned, in this order.
+# Include every story in these epics, in this order.
 [epics.ACME-100] # Customer sign-up
 [epics.ACME-200] # Invoice export
 
 [stories]
-# Single stories to plan, outside the epics above.
+# Include individual stories outside the epics above.
 [stories.ACME-310] # Fix login timeout
 
 [stories.ACME-320] # Add audit log
-depends_on = ["ACME-310"]   # optional: the story starts after the listed stories finish
+depends_on = ["ACME-310"]   # wait until these stories are finished
