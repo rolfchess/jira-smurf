@@ -199,7 +199,7 @@ class GanttConfig:
     implementation_status: str  # status where open stories show their days of work in a badge, "" if not set
     exclude: list  # [key or project key, ...] — uppercase; stories that match are left out of the chart
     badges: list  # [{field, label, color, stripe}, ...] — badges on epic rows where a Jira field is set
-    visuals: dict  # {past_due_blink: bool, past_due_color: css_color, behind_baseline_color: css_color}
+    visuals: dict  # {past_due_blink, past_due_color, behind_baseline_blink, behind_baseline_color}
 
 
 def is_excluded(key, exclude):
@@ -494,11 +494,13 @@ def parse_badges(badges_raw, path):
     return badges
 
 
-DEFAULT_VISUALS = {"past_due_blink": True, "past_due_color": "#d62728", "behind_baseline_color": "#f2c200"}
+DEFAULT_VISUALS = {"past_due_blink": True, "past_due_color": "#d62728",
+                   "behind_baseline_blink": False, "behind_baseline_color": "#f2c200"}
 
 
 def parse_visuals(visuals_raw, path):
-    """Return the [visuals] of the configuration as {past_due_blink, past_due_color, behind_baseline_color}.
+    """Return the [visuals] of the configuration as
+    {past_due_blink, past_due_color, behind_baseline_blink, behind_baseline_color}.
 
     Each setting is optional and has the value of DEFAULT_VISUALS when it is left out.
     """
@@ -510,10 +512,10 @@ def parse_visuals(visuals_raw, path):
         print(f"Error: [visuals] in {path} has unknown settings: {', '.join(sorted(unknown))}", file=sys.stderr)
         sys.exit(1)
     visuals = dict(DEFAULT_VISUALS, **visuals_raw)
-    if not isinstance(visuals["past_due_blink"], bool):
-        print(f"Error: 'past_due_blink' in [visuals] must be true or false, got {visuals['past_due_blink']!r}",
-              file=sys.stderr)
-        sys.exit(1)
+    for name in ("past_due_blink", "behind_baseline_blink"):
+        if not isinstance(visuals[name], bool):
+            print(f"Error: '{name}' in [visuals] must be true or false, got {visuals[name]!r}", file=sys.stderr)
+            sys.exit(1)
     for name in ("past_due_color", "behind_baseline_color"):
         if not is_css_color(visuals[name]):
             print(f"Error: '{name}' in [visuals] must be a CSS color such as \"{DEFAULT_VISUALS[name]}\", "
@@ -1980,6 +1982,17 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     visuals = visuals or DEFAULT_VISUALS
     past_due = visuals["past_due_color"]
     behind = visuals["behind_baseline_color"]
+    behind_css = (f"  .gantt_task_line.change-late {{ box-shadow: 0 0 0 2px {behind}, "
+                  f"0 0 6px 3px color-mix(in srgb, {behind} 60%, transparent); }}")
+    if visuals["behind_baseline_blink"]:
+        behind_css = f"""  .gantt_task_line.change-late {{ box-shadow: 0 0 0 2px {behind}; animation: change-late-glow 0.5s ease-in-out infinite; }}
+  @keyframes change-late-glow {{
+    0%, 100% {{ box-shadow: 0 0 0 2px {behind}, 0 0 2px 1px color-mix(in srgb, {behind} 30%, transparent); }}
+    50% {{ box-shadow: 0 0 0 2px {behind}, 0 0 8px 4px color-mix(in srgb, {behind} 60%, transparent); }}
+  }}
+  @media (prefers-reduced-motion: reduce) {{
+    .gantt_task_line.change-late {{ animation: none; }}
+  }}"""
     past_due_css = (f"  .gantt_task_line.due-late {{ box-shadow: 0 0 0 2px {past_due}, "
                     f"0 0 6px 3px color-mix(in srgb, {past_due} 45%, transparent); }}")
     if visuals["past_due_blink"]:
@@ -1997,7 +2010,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     status_classes = {name: f"status-color-{i}" for i, name in enumerate(status_colors)}
     status_classes_json = json.dumps(status_classes)
     status_css = "\n".join(
-        f"  .gantt_row.{cls}, .gantt_task_row.{cls} {{ background: {status_colors[name]}; }}"
+        f"  #gantt_here .gantt_row.{cls}, #gantt_here .gantt_task_row.{cls} {{ background: {status_colors[name]}; }}"
         for name, cls in status_classes.items()
     )
     status_css += "".join(
@@ -2089,7 +2102,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   .points-badge.points-over {{ border-color: #f0c08a; background: #fdf1e3; color: #9a5a12; }}
   .gantt_row.task-done-row .points-badge {{ opacity: 0.6; }}
   /* Epic rows stand out from their stories */
-  .gantt_row.epic-row, .gantt_task_row.epic-row {{ background: #eef2f7; }}
+  #gantt_here .gantt_row.epic-row, #gantt_here .gantt_task_row.epic-row {{ background: #eef2f7; }}
   .gantt_row.epic-row {{ font-weight: 600; }}
   /* A darker shade of the blue-grey epic row background */
   .gantt_row.epic-row .points-badge {{ border-color: #52677f; background: #52677f; color: #fff; }}
@@ -2116,13 +2129,19 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   .gantt_row.search-match-row {{ background: #fff7c2 !important; font-weight: 600; }}
   .gantt_row.search-dim-row {{ opacity: 0.45; }}
   #show-changes-wrap {{ display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }}
-  .gantt_row.change-new-row, .gantt_task_row.change-new-row {{ background: #fff3bf; }}
+  #gantt_here .gantt_row.change-new-row, #gantt_here .gantt_task_row.change-new-row {{ background: #fff3bf; }}
+  /* The row under the mouse darkens in the grid and in the timeline. The row colors above have the
+     #gantt_here prefix, so they win over the grey hover of dhtmlx, and this layer darkens them. */
+  #gantt_here {{ --dhx-gantt-base-colors-hover-color: var(--dhx-gantt-task-row-background); }}
+  #gantt_here .gantt_row.row-hover, #gantt_here .gantt_task_row.row-hover {{
+    background-image: linear-gradient(rgba(0, 0, 0, 0.07), rgba(0, 0, 0, 0.07)) !important;
+  }}
   .gantt_row.change-removed-row {{ color: #999; text-decoration: line-through; }}
   .gantt_task_line.change-removed {{ opacity: 0.5; }}
   .gantt_task_line.roadmap-epic {{ opacity: 0.75;
     background-image: repeating-linear-gradient(45deg, rgba(255,255,255,0.45) 0 6px, transparent 6px 12px); }}
   .gantt_task_line.no-bar {{ display: none; }}
-  .gantt_task_line.change-late {{ box-shadow: 0 0 0 2px {behind}, 0 0 6px 3px color-mix(in srgb, {behind} 60%, transparent); }}
+{behind_css}
 {past_due_css}
   .delta-up {{ color: #c62828; font-weight: 600; }}
   .delta-down {{ color: #2e7d32; font-weight: 600; }}
@@ -2671,7 +2690,7 @@ gantt.templates.timeline_cell_class = function(task, date) {{
   if (date.getDay() === 0 || date.getDay() === 6 || holidays.has(dayKey(date))) return "weekend";
   return "";
 }};
-// Thin gray bars at the baseline dates, under the real bars.
+// Thin bars at the baseline dates, under the real bars, in the dark shade of the bar color.
 function drawBaselineBars() {{
   var area = gantt.$task_data;
   if (!area) return;
@@ -2689,6 +2708,8 @@ function drawBaselineBars() {{
     var pos = gantt.getTaskPosition(task, parse(task.base_start), parse(task.base_end));
     var bar = document.createElement("div");
     bar.className = "baseline-bar";
+    // The same shade as the done part of a bar: the bar color under 30% black
+    if (task.color) bar.style.background = "color-mix(in srgb, " + task.color + " 70%, black)";
     bar.style.left = pos.left + "px";
     bar.style.width = Math.max(pos.width, 2) + "px";
     // pos.top is the top of the row and the bar is centered in it
@@ -2750,6 +2771,26 @@ gantt.addMarker({{ start_date: new Date(), css: "today-marker", text: "Today" }}
   taskArea.addEventListener("mouseleave", function() {{
     ruler.style.display = "none";
   }});
+}})();
+// Mark both halves of the row under the mouse, the grid row and the timeline row, with row-hover
+(function() {{
+  var container = document.getElementById("gantt_here");
+  var hoverId = null;
+  function markRow(id) {{
+    hoverId = id;
+    container.querySelectorAll(".row-hover").forEach(function(el) {{ el.classList.remove("row-hover"); }});
+    if (id === null) return;
+    container.querySelectorAll('.gantt_row[data-task-id="' + id + '"], .gantt_task_row[data-task-id="' + id + '"]')
+      .forEach(function(el) {{ el.classList.add("row-hover"); }});
+  }}
+  container.addEventListener("mouseover", function(e) {{
+    var el = e.target.closest("[data-task-id]");
+    var id = el ? el.getAttribute("data-task-id") : null;
+    if (id !== hoverId) markRow(id);
+  }});
+  container.addEventListener("mouseleave", function() {{ markRow(null); }});
+  // A redraw makes new row elements, so mark the row under the mouse again
+  gantt.attachEvent("onDataRender", function() {{ if (hoverId !== null) markRow(hoverId); }});
 }})();
 gantt.parse({{ data: {tasks_json}, links: {links_json} }});
 buildMemberFilter();
