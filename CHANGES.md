@@ -6,6 +6,7 @@ The tool has no version numbers yet. This file lists the changes per week, newes
 
 - Show the last day of a bar next to it in the Gantt chart. It showed the day after, one day later
   than the info popup.
+- Open a story in Jira only with a click on its bar, not on the labels next to the bar.
 - Fetch the status history of all stories with the bulk changelog of Jira, one call per 1000
   stories. When that fails, fetch the history of each story, 4 at a time.
 - Add `behind_baseline_blink` to `[visuals]`, to make the outline of a story that is behind the

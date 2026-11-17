@@ -2938,7 +2938,8 @@ applyFilters();
 }})();
 document.getElementById("gantt_here").addEventListener("click", function(e) {{
   var bar = e.target.closest(".gantt_task_line");
-  if (!bar) return;
+  // The labels next to a bar are inside its element, but only the bar itself opens the story
+  if (!bar || e.target.closest(".gantt_side_content")) return;
   var id = bar.getAttribute("task_id");
   if (!id) return;
   try {{
