@@ -12,6 +12,8 @@ The tool has no version numbers yet. This file lists the changes per week, newes
 - Show the info popup of a story only over its bar and over its title in the Story column. The
   popup appears just under the row and follows the mouse along the row.
 - Show the points in the output of `velocity` with one decimal, so the table lines up.
+- Add a Stories column to the output of `velocity`, with the number of finished stories that have
+  story points.
 
 ## Week of 2026-11-09
 

@@ -3131,6 +3131,7 @@ def run_velocity(config_path, weeks):
     print(f"Fetching the stories finished from {start} to {end - timedelta(days=1)}...", file=sys.stderr)
     week_starts = [start + timedelta(weeks=i) for i in range(weeks)]
     points = {w: 0.0 for w in week_starts}
+    pointed = {w: 0 for w in week_starts}
     unpointed = {w: 0 for w in week_starts}
     for issue in fetch_finished_stories(start, end):
         fields = issue["fields"]
@@ -3144,6 +3145,8 @@ def run_velocity(config_path, weeks):
         if story_points is None:
             unpointed[week] += 1
             story_points = assumed_points
+        else:
+            pointed[week] += 1
         points[week] += story_points
 
     def team_hours(first_day):
@@ -3153,19 +3156,20 @@ def run_velocity(config_path, weeks):
     def ratio(hours, pts):
         return f"{hours / pts:.1f}" if pts else "-"
 
-    print(f"{'Week':<10}  {'Hours':>6}  {'Points':>6}  {'Hours/point':>11}  {'No points':>9}")
-    total_hours = total_points = total_unpointed = 0
+    print(f"{'Week':<10}  {'Hours':>6}  {'Stories':>7}  {'Points':>6}  {'Hours/point':>11}  {'No points':>9}")
+    total_hours = total_points = total_pointed = total_unpointed = 0
     for week in week_starts:
         hours = team_hours(week)
         iso_year, iso_week, _ = week.isocalendar()
         label = f"{iso_year}-W{iso_week:02d}"
-        print(f"{label:<10}  {hours:>6g}  {points[week]:>6.1f}  {ratio(hours, points[week]):>11}  "
-              f"{unpointed[week]:>9}")
+        print(f"{label:<10}  {hours:>6g}  {pointed[week]:>7}  {points[week]:>6.1f}  "
+              f"{ratio(hours, points[week]):>11}  {unpointed[week]:>9}")
         total_hours += hours
         total_points += points[week]
+        total_pointed += pointed[week]
         total_unpointed += unpointed[week]
-    print(f"{'Total':<10}  {total_hours:>6g}  {total_points:>6.1f}  {ratio(total_hours, total_points):>11}  "
-          f"{total_unpointed:>9}")
+    print(f"{'Total':<10}  {total_hours:>6g}  {total_pointed:>7}  {total_points:>6.1f}  "
+          f"{ratio(total_hours, total_points):>11}  {total_unpointed:>9}")
     print()
     if total_points:
         print(f"Velocity over the last {weeks} weeks: {total_hours / total_points:.1f} hours per story point. "
