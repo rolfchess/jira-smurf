@@ -8,7 +8,7 @@ The Day, Week, Month and Quarter buttons set the scale of the chart. A filter th
 and the dates in view. Scroll to see stories outside them. Until you pick a scale, a filter fits the
 chart to the stories that are shown. After Fit All, it does the same.
 
-Click a bar to open its Jira issue. Issue icons are embedded in the page so they work without a Jira
+The row under the mouse is darker across the whole chart. Click a bar to open its Jira issue. Issue icons are embedded in the page so they work without a Jira
 login; an emoji is used when an icon cannot be downloaded.
 
 ## What the chart shows

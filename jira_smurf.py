@@ -2010,7 +2010,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     status_classes = {name: f"status-color-{i}" for i, name in enumerate(status_colors)}
     status_classes_json = json.dumps(status_classes)
     status_css = "\n".join(
-        f"  .gantt_row.{cls}, .gantt_task_row.{cls} {{ background: {status_colors[name]}; }}"
+        f"  #gantt_here .gantt_row.{cls}, #gantt_here .gantt_task_row.{cls} {{ background: {status_colors[name]}; }}"
         for name, cls in status_classes.items()
     )
     status_css += "".join(
@@ -2102,7 +2102,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   .points-badge.points-over {{ border-color: #f0c08a; background: #fdf1e3; color: #9a5a12; }}
   .gantt_row.task-done-row .points-badge {{ opacity: 0.6; }}
   /* Epic rows stand out from their stories */
-  .gantt_row.epic-row, .gantt_task_row.epic-row {{ background: #eef2f7; }}
+  #gantt_here .gantt_row.epic-row, #gantt_here .gantt_task_row.epic-row {{ background: #eef2f7; }}
   .gantt_row.epic-row {{ font-weight: 600; }}
   /* A darker shade of the blue-grey epic row background */
   .gantt_row.epic-row .points-badge {{ border-color: #52677f; background: #52677f; color: #fff; }}
@@ -2129,7 +2129,13 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   .gantt_row.search-match-row {{ background: #fff7c2 !important; font-weight: 600; }}
   .gantt_row.search-dim-row {{ opacity: 0.45; }}
   #show-changes-wrap {{ display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }}
-  .gantt_row.change-new-row, .gantt_task_row.change-new-row {{ background: #fff3bf; }}
+  #gantt_here .gantt_row.change-new-row, #gantt_here .gantt_task_row.change-new-row {{ background: #fff3bf; }}
+  /* The row under the mouse darkens in the grid and in the timeline. The row colors above have the
+     #gantt_here prefix, so they win over the grey hover of dhtmlx, and this layer darkens them. */
+  #gantt_here {{ --dhx-gantt-base-colors-hover-color: var(--dhx-gantt-task-row-background); }}
+  #gantt_here .gantt_row.row-hover, #gantt_here .gantt_task_row.row-hover {{
+    background-image: linear-gradient(rgba(0, 0, 0, 0.07), rgba(0, 0, 0, 0.07)) !important;
+  }}
   .gantt_row.change-removed-row {{ color: #999; text-decoration: line-through; }}
   .gantt_task_line.change-removed {{ opacity: 0.5; }}
   .gantt_task_line.roadmap-epic {{ opacity: 0.75;
@@ -2765,6 +2771,26 @@ gantt.addMarker({{ start_date: new Date(), css: "today-marker", text: "Today" }}
   taskArea.addEventListener("mouseleave", function() {{
     ruler.style.display = "none";
   }});
+}})();
+// Mark both halves of the row under the mouse, the grid row and the timeline row, with row-hover
+(function() {{
+  var container = document.getElementById("gantt_here");
+  var hoverId = null;
+  function markRow(id) {{
+    hoverId = id;
+    container.querySelectorAll(".row-hover").forEach(function(el) {{ el.classList.remove("row-hover"); }});
+    if (id === null) return;
+    container.querySelectorAll('.gantt_row[data-task-id="' + id + '"], .gantt_task_row[data-task-id="' + id + '"]')
+      .forEach(function(el) {{ el.classList.add("row-hover"); }});
+  }}
+  container.addEventListener("mouseover", function(e) {{
+    var el = e.target.closest("[data-task-id]");
+    var id = el ? el.getAttribute("data-task-id") : null;
+    if (id !== hoverId) markRow(id);
+  }});
+  container.addEventListener("mouseleave", function() {{ markRow(null); }});
+  // A redraw makes new row elements, so mark the row under the mouse again
+  gantt.attachEvent("onDataRender", function() {{ if (hoverId !== null) markRow(hoverId); }});
 }})();
 gantt.parse({{ data: {tasks_json}, links: {links_json} }});
 buildMemberFilter();
