@@ -2764,7 +2764,8 @@ gantt.templates.rightside_text = function(start, end, task) {{
       " <span class='impl-badge" + (diff > 0 ? " impl-over" : "") + "' title='" + title + "'>impl " +
       task.implementation_days + "/" + task.estimate_days + "d</span>";
   }}
-  parts.push(gantt.date.date_to_str("%d %M")(end));
+  // end is the day after the last day of the bar, as in the info popup
+  parts.push(gantt.date.date_to_str("%d %M")(gantt.date.add(end, -1, "day")));
   return "<span style='font-size:11px;color:#666;'>" + parts.join(" \u2022 ") + "</span>";
 }};
 var holidays = new Set({holidays_json});
