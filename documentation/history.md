@@ -24,7 +24,7 @@ The chart's **Show changes since …** checkbox controls comparison marks:
 
 - yellow rows and `NEW` identify new stories;
 - tooltips show estimate changes;
-- thin gray bars show baseline dates;
+- thin bars show baseline dates, in the dark shade of the bar color;
 - the Moved column shows the change in working days;
 - yellow outlines identify work that should already have finished (set the color and the blinking
   with `behind_baseline_color` and `behind_baseline_blink` in `[visuals]`);

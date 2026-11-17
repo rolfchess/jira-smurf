@@ -2684,7 +2684,7 @@ gantt.templates.timeline_cell_class = function(task, date) {{
   if (date.getDay() === 0 || date.getDay() === 6 || holidays.has(dayKey(date))) return "weekend";
   return "";
 }};
-// Thin gray bars at the baseline dates, under the real bars.
+// Thin bars at the baseline dates, under the real bars, in the dark shade of the bar color.
 function drawBaselineBars() {{
   var area = gantt.$task_data;
   if (!area) return;
@@ -2702,6 +2702,8 @@ function drawBaselineBars() {{
     var pos = gantt.getTaskPosition(task, parse(task.base_start), parse(task.base_end));
     var bar = document.createElement("div");
     bar.className = "baseline-bar";
+    // The same shade as the done part of a bar: the bar color under 30% black
+    if (task.color) bar.style.background = "color-mix(in srgb, " + task.color + " 70%, black)";
     bar.style.left = pos.left + "px";
     bar.style.width = Math.max(pos.width, 2) + "px";
     // pos.top is the top of the row and the bar is centered in it

@@ -6,6 +6,7 @@ The tool has no version numbers yet. This file lists the changes per week, newes
 
 - Add `behind_baseline_blink` to `[visuals]`, to make the outline of a story that is behind the
   baseline blink. It does not blink by default.
+- Show the baseline bar of a story in the dark shade of its bar color, not in gray.
 
 ## Week of 2026-11-09
 
