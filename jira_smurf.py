@@ -2133,6 +2133,9 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   /* The row under the mouse darkens in the grid and in the timeline. The row colors above have the
      #gantt_here prefix, so they win over the grey hover of dhtmlx, and this layer darkens them. */
   #gantt_here {{ --dhx-gantt-base-colors-hover-color: var(--dhx-gantt-task-row-background); }}
+  /* The info popup has the look of the dhtmlx tooltip (class gantt_tooltip); the page places it */
+  #task-popup {{ position: fixed; z-index: 10001; pointer-events: none; }}
+  #task-popup:not(.shown) {{ display: none; }}
   #gantt_here .gantt_row.row-hover, #gantt_here .gantt_task_row.row-hover {{
     background-image: linear-gradient(rgba(0, 0, 0, 0.07), rgba(0, 0, 0, 0.07)) !important;
   }}
@@ -2234,7 +2237,7 @@ function refreshChart() {{
 {trend}
 <script src="https://cdn.dhtmlx.com/gantt/9.0/dhtmlxgantt.js"></script>
 <script>
-gantt.plugins({{ tooltip: true, marker: true }});
+gantt.plugins({{ marker: true }});
 var typeIconImages = {icon_images_json};  // {{icon address: data URI}} of the issue type icons from Jira
 var showChanges = {show_changes_json};
 function signed(value, unit) {{
@@ -2267,7 +2270,7 @@ gantt.config.columns = [
         task.icon ? "<span class='type-icon'>" + task.icon + "</span>" : "";
       // The badges come before the name, so a long name does not hide them
       return icon + (task.badges_html || "") +
-        "<span title='" + task.text.replace(/'/g, "&#39;") + "'>" + task.text + "</span>";
+        "<span>" + task.text + "</span>";
     }} }},
   {{name: "status", label: "Status", align: "left", width: 120, resize: true}},
   {{name: "points", label: "Points", align: "center", width: 70, resize: true,
@@ -2772,6 +2775,47 @@ gantt.addMarker({{ start_date: new Date(), css: "today-marker", text: "Today" }}
     ruler.style.display = "none";
   }});
 }})();
+// The info popup of a story or epic. It shows over a bar and over the title in the Story column, but not
+// over the text next to a bar or over a badge, which have their own tooltips. It is placed under the row
+// and follows the mouse along the row.
+(function() {{
+  var container = document.getElementById("gantt_here");
+  var popup = document.createElement("div");
+  popup.id = "task-popup";
+  popup.className = "gantt_tooltip";
+  document.body.appendChild(popup);
+  var shownId = null;
+  function hide() {{
+    popup.classList.remove("shown");
+    shownId = null;
+  }}
+  container.addEventListener("mousemove", function(e) {{
+    var spot = e.target.closest(".gantt_task_line, .gantt_grid_data .gantt_cell[data-column-name='text']");
+    if (!spot || e.target.closest(".gantt_side_content, .field-badge, .tree-buttons")) return hide();
+    var id = spot.closest("[data-task-id]").getAttribute("data-task-id");
+    if (!gantt.isTaskExists(id)) return hide();
+    if (id !== shownId) {{
+      var task = gantt.getTask(id);
+      var html = gantt.templates.tooltip_text(task.start_date, task.end_date, task);
+      if (!html) return hide();
+      // One block, so that the column layout of gantt_tooltip does not turn each <br/> into a line of its own
+      popup.innerHTML = "<div>" + html + "</div>";
+      popup.classList.add("shown");
+      shownId = id;
+    }}
+    var row = container.querySelector('.gantt_row[data-task-id="' + id + '"]') || spot;
+    var rowBox = row.getBoundingClientRect();
+    var gap = 4;
+    var top = rowBox.bottom + gap;
+    // Above the row when there is no room under it
+    if (top + popup.offsetHeight > window.innerHeight) top = rowBox.top - gap - popup.offsetHeight;
+    var left = Math.min(e.clientX + 12, window.innerWidth - popup.offsetWidth - 8);
+    popup.style.left = Math.max(8, left) + "px";
+    popup.style.top = top + "px";
+  }});
+  container.addEventListener("mouseleave", hide);
+  gantt.attachEvent("onGanttScroll", hide);
+}})();
 // Mark both halves of the row under the mouse, the grid row and the timeline row, with row-hover
 (function() {{
   var container = document.getElementById("gantt_here");
@@ -3087,6 +3131,7 @@ def run_velocity(config_path, weeks):
     print(f"Fetching the stories finished from {start} to {end - timedelta(days=1)}...", file=sys.stderr)
     week_starts = [start + timedelta(weeks=i) for i in range(weeks)]
     points = {w: 0.0 for w in week_starts}
+    pointed = {w: 0 for w in week_starts}
     unpointed = {w: 0 for w in week_starts}
     for issue in fetch_finished_stories(start, end):
         fields = issue["fields"]
@@ -3100,6 +3145,8 @@ def run_velocity(config_path, weeks):
         if story_points is None:
             unpointed[week] += 1
             story_points = assumed_points
+        else:
+            pointed[week] += 1
         points[week] += story_points
 
     def team_hours(first_day):
@@ -3109,19 +3156,20 @@ def run_velocity(config_path, weeks):
     def ratio(hours, pts):
         return f"{hours / pts:.1f}" if pts else "-"
 
-    print(f"{'Week':<10}  {'Hours':>6}  {'Points':>6}  {'Hours/point':>11}  {'No points':>9}")
-    total_hours = total_points = total_unpointed = 0
+    print(f"{'Week':<10}  {'Hours':>6}  {'Stories':>7}  {'Points':>6}  {'Hours/point':>11}  {'No points':>9}")
+    total_hours = total_points = total_pointed = total_unpointed = 0
     for week in week_starts:
         hours = team_hours(week)
         iso_year, iso_week, _ = week.isocalendar()
         label = f"{iso_year}-W{iso_week:02d}"
-        print(f"{label:<10}  {hours:>6g}  {points[week]:>6g}  {ratio(hours, points[week]):>11}  "
-              f"{unpointed[week]:>9}")
+        print(f"{label:<10}  {hours:>6g}  {pointed[week]:>7}  {points[week]:>6.1f}  "
+              f"{ratio(hours, points[week]):>11}  {unpointed[week]:>9}")
         total_hours += hours
         total_points += points[week]
+        total_pointed += pointed[week]
         total_unpointed += unpointed[week]
-    print(f"{'Total':<10}  {total_hours:>6g}  {total_points:>6g}  {ratio(total_hours, total_points):>11}  "
-          f"{total_unpointed:>9}")
+    print(f"{'Total':<10}  {total_hours:>6g}  {total_pointed:>7}  {total_points:>6.1f}  "
+          f"{ratio(total_hours, total_points):>11}  {total_unpointed:>9}")
     print()
     if total_points:
         print(f"Velocity over the last {weeks} weeks: {total_hours / total_points:.1f} hours per story point. "
@@ -3130,7 +3178,7 @@ def run_velocity(config_path, weeks):
         print(f"No stories with story points were finished in the last {weeks} weeks.")
     if total_unpointed:
         stories = "story had" if total_unpointed == 1 else "stories had"
-        print(f"{total_unpointed} finished {stories} no story points. Each counts as {assumed_points:g} points: "
+        print(f"{total_unpointed} finished {stories} no story points. Each counts as {assumed_points:.1f} points: "
               f"default_hours {config.default_hours:g} divided by velocity {config.velocity:g}.")
 
 
