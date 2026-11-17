@@ -16,6 +16,7 @@ import re
 import sys
 import threading
 import webbrowser
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 
@@ -73,6 +74,14 @@ def jira_get(path, params=None):
     """Make an authenticated GET request to the Jira REST API."""
     url = f"{JIRA_URL}/rest/api/3/{path}"
     resp = requests.get(url, params=params, auth=(JIRA_EMAIL, JIRA_API_TOKEN), timeout=30)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def jira_post(path, body):
+    """Make an authenticated POST request with a JSON body to the Jira REST API."""
+    url = f"{JIRA_URL}/rest/api/3/{path}"
+    resp = requests.post(url, json=body, auth=(JIRA_EMAIL, JIRA_API_TOKEN), timeout=60)
     resp.raise_for_status()
     return resp.json()
 
@@ -665,23 +674,96 @@ def fetch_sprint_stories(include_open, include_future):
     return issues
 
 
+CHANGELOG_BULK_SIZE = 1000  # the most issues that one bulk changelog call of Jira takes
+PARALLEL_CALLS = 4  # changelog calls at a time when the bulk changelog fails
+
+
+def history_day(created):
+    """Return the day of the "created" time of a Jira change history.
+
+    The time is text such as "2026-10-07T15:00:00.000+0200", or a number of milliseconds since
+    1970, as in the bulk changelog. A number gives the day in the time zone of this computer.
+    """
+    if isinstance(created, (int, float)) or str(created).isdigit():
+        return datetime.fromtimestamp(int(created) / 1000).date()
+    return date.fromisoformat(created[:10])
+
+
+def status_changes_from_histories(histories):
+    """Return the status changes in a list of Jira change histories as (date, new status name), oldest first."""
+    def order(history):
+        # Jira numbers the histories in the order they were made, so the number orders changes on one day
+        number = str(history.get("id", ""))
+        return history_day(history["created"]), int(number) if number.isdigit() else 0
+
+    changes = []
+    for history in sorted(histories, key=order):
+        day = history_day(history["created"])
+        for item in history.get("items", []):
+            if item.get("field") == "status":
+                changes.append((day, item.get("toString") or ""))
+    return changes
+
+
 def fetch_status_changes(issue_key):
     """Return the status changes of a story as a list of (date, new status name), oldest first."""
-    changes = []
+    histories = []
     start_at = 0
     while True:
         data = jira_get(f"issue/{issue_key}/changelog", params={"startAt": start_at, "maxResults": 100})
         values = data.get("values", [])
-        for history in values:
-            day = date.fromisoformat(history["created"][:10])
-            for item in history.get("items", []):
-                if item.get("field") == "status":
-                    changes.append((day, item.get("toString") or ""))
+        histories.extend(values)
         start_at += len(values)
         if data.get("isLast", True) or not values:
             break
-    changes.sort(key=lambda change: change[0])
-    return changes
+    return status_changes_from_histories(histories)
+
+
+def fetch_status_changes_bulk(issues):
+    """Return {issue key: status changes} for the given issues, from the bulk changelog of Jira.
+
+    issues are Jira issue dicts with an "id" and a "key". The status changes are as in
+    fetch_status_changes. This raises requests.RequestException when a call fails, and
+    ValueError when Jira answers in another form.
+    """
+    key_by_id = {str(issue["id"]): issue["key"] for issue in issues}
+    histories = {key: [] for key in key_by_id.values()}
+    ids = list(key_by_id)
+    for first in range(0, len(ids), CHANGELOG_BULK_SIZE):
+        body = {"issueIdsOrKeys": ids[first:first + CHANGELOG_BULK_SIZE], "fieldIds": ["status"],
+                "maxResults": 10000}
+        while True:
+            data = jira_post("changelog/bulkfetch", body)
+            if not isinstance(data.get("issueChangeLogs"), list):
+                raise ValueError("the answer has no issueChangeLogs")
+            for log in data["issueChangeLogs"]:
+                key = key_by_id.get(str(log.get("issueId")))
+                if key is None:
+                    raise ValueError(f"the answer has an unknown issue {log.get('issueId')!r}")
+                histories[key].extend(log.get("changeHistories") or [])
+            if not data.get("nextPageToken"):
+                break
+            body = dict(body, nextPageToken=data["nextPageToken"])
+    return {key: status_changes_from_histories(found) for key, found in histories.items()}
+
+
+def fetch_all_status_changes(issues):
+    """Return {issue key: status changes} for the given Jira issue dicts, which have an "id" and a "key".
+
+    The status changes are as in fetch_status_changes. This uses the bulk changelog of Jira,
+    one call per 1000 issues. When that fails, it fetches the changelog of each issue,
+    PARALLEL_CALLS at a time.
+    """
+    if not issues:
+        return {}
+    try:
+        return fetch_status_changes_bulk(issues)
+    except (requests.RequestException, ValueError, KeyError, TypeError) as e:
+        print(f"Warning: the bulk changelog of Jira failed ({e}), so the history of each story is fetched "
+              f"separately, {PARALLEL_CALLS} at a time", file=sys.stderr)
+    keys = [issue["key"] for issue in issues]
+    with ThreadPoolExecutor(max_workers=PARALLEL_CALLS) as pool:
+        return dict(zip(keys, pool.map(fetch_status_changes, keys)))
 
 
 def work_dates(status_changes, statuses, work_start_progress=0.0):
@@ -2992,38 +3074,40 @@ def run_gantt(config_path, history_dir=None, since=None):
         issue["_epic_key"] = (parent.get("key", "") if parent
                               else issue["fields"].get("customfield_10014", ""))
 
-    # Place done stories on the days they were worked on, from their status history
-    done_keys = [key for key in ordered_keys
-                 if config.statuses.get(story_data[key]["fields"].get("status", {}).get("name", "").lower(), 0) >= 1.0]
-    done_dates = {}
-    if done_keys:
-        print(f"Fetching the status history of {len(done_keys)} done stories...", file=sys.stderr)
-        for key in done_keys:
-            dates = work_dates(fetch_status_changes(key), config.statuses, config.work_start_progress)
-            if dates:
-                done_dates[key] = dates
-        missing = len(done_keys) - len(done_dates)
-        if missing:
-            print(f"  {missing} done {'story has' if missing == 1 else 'stories have'} no change to a done status "
-                  f"in the history, so the plan start is used", file=sys.stderr)
+    # The status history is needed for the done stories, and for the open stories that are at the
+    # implementation status or a later one: only those can have spent time there
+    def progress_of(key):
+        return config.statuses.get(story_data[key]["fields"].get("status", {}).get("name", "").lower(), 0)
 
-    # Find the stretches open stories spent in the implementation status or a later one, from their
-    # status history. Only stories that are at least that far along can have been there, so only
-    # those are fetched.
+    done_keys = [key for key in ordered_keys if progress_of(key) >= 1.0]
+    open_keys = []
     if config.implementation_status:
         impl_progress = config.statuses[config.implementation_status.lower()]
-        open_keys = [key for key in ordered_keys
-                     if impl_progress <= config.statuses.get(
-                         story_data[key]["fields"].get("status", {}).get("name", "").lower(), 0) < 1.0]
-        if open_keys:
-            print(f"Fetching the status history of {len(open_keys)} open stories...", file=sys.stderr)
-            for key in open_keys:
-                stretches = implementation_stretches(fetch_status_changes(key), config.implementation_status,
-                                                     config.statuses)
-                if stretches:
-                    story_data[key]["_implementation_date"] = stretches[0][0].isoformat()
-                    story_data[key]["_implementation_stretches"] = [
-                        [start.isoformat(), end.isoformat() if end else ""] for start, end in stretches]
+        open_keys = [key for key in ordered_keys if impl_progress <= progress_of(key) < 1.0]
+    status_changes = {}
+    if done_keys or open_keys:
+        print(f"Fetching the status history of {len(done_keys)} done and {len(open_keys)} open "
+              f"{'story' if len(done_keys) + len(open_keys) == 1 else 'stories'}...", file=sys.stderr)
+        status_changes = fetch_all_status_changes([story_data[key] for key in done_keys + open_keys])
+
+    # Place done stories on the days they were worked on, from their status history
+    done_dates = {}
+    for key in done_keys:
+        dates = work_dates(status_changes[key], config.statuses, config.work_start_progress)
+        if dates:
+            done_dates[key] = dates
+    missing = len(done_keys) - len(done_dates)
+    if missing:
+        print(f"  {missing} done {'story has' if missing == 1 else 'stories have'} no change to a done status "
+              f"in the history, so the plan start is used", file=sys.stderr)
+
+    # Find the stretches open stories spent in the implementation status or a later one
+    for key in open_keys:
+        stretches = implementation_stretches(status_changes[key], config.implementation_status, config.statuses)
+        if stretches:
+            story_data[key]["_implementation_date"] = stretches[0][0].isoformat()
+            story_data[key]["_implementation_stretches"] = [
+                [start.isoformat(), end.isoformat() if end else ""] for start, end in stretches]
 
     # The planner takes stories in this order; the story rows keep the order of the configuration file
     schedule_keys = ordered_keys
