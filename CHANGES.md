@@ -4,6 +4,8 @@ The tool has no version numbers yet. This file lists the changes per week, newes
 
 ## Week of 2026-11-16
 
+- Fetch the status history of all stories with the bulk changelog of Jira, one call per 1000
+  stories. When that fails, fetch the history of each story, 4 at a time.
 - Add `behind_baseline_blink` to `[visuals]`, to make the outline of a story that is behind the
   baseline blink. It does not blink by default.
 - Show the baseline bar of a story in the dark shade of its bar color, not in gray.
