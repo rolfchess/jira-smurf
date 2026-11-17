@@ -199,6 +199,7 @@ class GanttConfig:
     implementation_status: str  # status where open stories show their days of work in a badge, "" if not set
     exclude: list  # [key or project key, ...] — uppercase; stories that match are left out of the chart
     badges: list  # [{field, label, color, stripe}, ...] — badges on epic rows where a Jira field is set
+    visuals: dict  # {past_due_blink: bool, past_due_color: css_color, behind_baseline_color: css_color}
 
 
 def is_excluded(key, exclude):
@@ -408,6 +409,7 @@ def load_gantt_config(path="gantt.toml"):
         sys.exit(1)
 
     badges = parse_badges(raw.get("badges", []), path)
+    visuals = parse_visuals(raw.get("visuals", {}), path)
 
     if not epic_keys and not story_keys and not include_open_sprints and not include_future_sprints:
         print(f"Error: [epics] and [stories] are missing or empty in {path}, "
@@ -428,7 +430,8 @@ def load_gantt_config(path="gantt.toml"):
                        auto_assign=auto_assign_team,
                        implementation_status=implementation_status or "",
                        exclude=[entry.strip().upper() for entry in exclude],
-                       badges=badges)
+                       badges=badges,
+                       visuals=visuals)
 
 
 DEFAULT_BADGE_COLOR = "#d9a520"  # amber, so a badge does not look like the orange "over the estimate" badge
@@ -489,6 +492,34 @@ def parse_badges(badges_raw, path):
         badges.append({"field": field.strip(), "label": label.strip(), "color": color, "stripe": stripe,
                        "values": [v.strip().lower() for v in values]})
     return badges
+
+
+DEFAULT_VISUALS = {"past_due_blink": True, "past_due_color": "#d62728", "behind_baseline_color": "#f2c200"}
+
+
+def parse_visuals(visuals_raw, path):
+    """Return the [visuals] of the configuration as {past_due_blink, past_due_color, behind_baseline_color}.
+
+    Each setting is optional and has the value of DEFAULT_VISUALS when it is left out.
+    """
+    if not isinstance(visuals_raw, dict):
+        print(f"Error: [visuals] in {path} must be a table", file=sys.stderr)
+        sys.exit(1)
+    unknown = set(visuals_raw) - set(DEFAULT_VISUALS)
+    if unknown:
+        print(f"Error: [visuals] in {path} has unknown settings: {', '.join(sorted(unknown))}", file=sys.stderr)
+        sys.exit(1)
+    visuals = dict(DEFAULT_VISUALS, **visuals_raw)
+    if not isinstance(visuals["past_due_blink"], bool):
+        print(f"Error: 'past_due_blink' in [visuals] must be true or false, got {visuals['past_due_blink']!r}",
+              file=sys.stderr)
+        sys.exit(1)
+    for name in ("past_due_color", "behind_baseline_color"):
+        if not is_css_color(visuals[name]):
+            print(f"Error: '{name}' in [visuals] must be a CSS color such as \"{DEFAULT_VISUALS[name]}\", "
+                  f"got {visuals[name]!r}", file=sys.stderr)
+            sys.exit(1)
+    return visuals
 
 
 def fetch_stories_for_epic(epic_key):
@@ -1660,7 +1691,7 @@ EPIC_COLORS = [
 
 def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=(), status_colors=None,
                      changes=None, snapshots=(), icon_images=None, epic_icon_url="",
-                     epics_info=None, roadmap_epics=(), epic_order=()):
+                     epics_info=None, roadmap_epics=(), epic_order=(), visuals=None):
     """Write a self-contained HTML file with a DHTMLX Gantt chart.
 
     With changes (from compare_plans), the chart can mark what changed since the baseline.
@@ -1671,6 +1702,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     epics without stories; each is shown as a striped bar from its start to its due date.
     epic_order is the list of epic keys in the order of the epic rows. Epics that are not in it
     come after them.
+    visuals is the [visuals] of the configuration, from parse_visuals.
     """
     # Assign colors to epics
     epics_seen = []
@@ -1944,6 +1976,22 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     summary_html = changes_summary_html(changes) if changes else ""
     trend = trend_html(list(snapshots), epic_color_map, set(holidays), changes["since"] if changes else None)
 
+    # The outline of a story or epic that ends after its due date, blinking or not
+    visuals = visuals or DEFAULT_VISUALS
+    past_due = visuals["past_due_color"]
+    behind = visuals["behind_baseline_color"]
+    past_due_css = (f"  .gantt_task_line.due-late {{ box-shadow: 0 0 0 2px {past_due}, "
+                    f"0 0 6px 3px color-mix(in srgb, {past_due} 45%, transparent); }}")
+    if visuals["past_due_blink"]:
+        past_due_css = f"""  .gantt_task_line.due-late {{ box-shadow: 0 0 0 2px {past_due}; animation: due-late-glow 0.5s ease-in-out infinite; }}
+  @keyframes due-late-glow {{
+    0%, 100% {{ box-shadow: 0 0 0 2px {past_due}, 0 0 2px 1px color-mix(in srgb, {past_due} 30%, transparent); }}
+    50% {{ box-shadow: 0 0 0 2px {past_due}, 0 0 8px 4px color-mix(in srgb, {past_due} 60%, transparent); }}
+  }}
+  @media (prefers-reduced-motion: reduce) {{
+    .gantt_task_line.due-late {{ animation: none; }}
+  }}"""
+
     # Each status color has one CSS class, used on the grid row and the timeline row
     status_colors = status_colors or {}
     status_classes = {name: f"status-color-{i}" for i, name in enumerate(status_colors)}
@@ -2074,7 +2122,8 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   .gantt_task_line.roadmap-epic {{ opacity: 0.75;
     background-image: repeating-linear-gradient(45deg, rgba(255,255,255,0.45) 0 6px, transparent 6px 12px); }}
   .gantt_task_line.no-bar {{ display: none; }}
-  .gantt_task_line.change-late {{ box-shadow: 0 0 0 2px #d62728; }}
+  .gantt_task_line.change-late {{ box-shadow: 0 0 0 2px {behind}, 0 0 6px 3px color-mix(in srgb, {behind} 60%, transparent); }}
+{past_due_css}
   .delta-up {{ color: #c62828; font-weight: 600; }}
   .delta-down {{ color: #2e7d32; font-weight: 600; }}
   .due-marker {{ position: absolute; width: 10px; height: 10px; background: #d62728; border: 1px solid #fff;
@@ -2117,16 +2166,16 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   <button id="refresh-button" hidden onclick="refreshChart()" title="Fetch the stories from Jira again and redraw the chart">Refresh from Jira</button>
   <span id="refresh-status"></span>
   <div class="zoom-buttons">
-    <button onclick="setZoom('day')">Day</button>
-    <button onclick="setZoom('week')">Week</button>
-    <button onclick="setZoom('month')">Month</button>
-    <button onclick="setZoom('quarter')">Quarter</button>
-    <button onclick="zoomToFit()">Fit All</button>
+    <button onclick="chooseZoom('day')">Day</button>
+    <button onclick="chooseZoom('week')">Week</button>
+    <button onclick="chooseZoom('month')">Month</button>
+    <button onclick="chooseZoom('quarter')">Quarter</button>
+    <button onclick="chooseZoom(null)">Fit All</button>
   </div>
   <label id="show-done-wrap"><input type="checkbox" id="show-done" onchange="applyFilters()"> Show done stories</label>
   {changes_toggle}
   <div id="search-wrap">
-    <input id="search-input" type="search" placeholder="Search stories, for example PROJ-123" oninput="onSearchInput()" onkeydown="if(event.key==='Escape'){{this.value='';onSearchInput();}}">
+    <input id="search-input" type="search" placeholder="Search stories, for example PROJ-123" oninput="onSearchTyping()" onkeydown="if(event.key==='Escape'){{this.value='';clearTimeout(searchTimer);onSearchInput();}}">
     <span id="search-count"></span>
   </div>
 </div>
@@ -2299,6 +2348,12 @@ function setZoom(level) {{
     b.classList.toggle("active", b.textContent.toLowerCase() === level);
   }});
 }}
+var chosenZoom = null;  // the level picked with a zoom button, or null to fit the chart to the shown stories
+function chooseZoom(level) {{
+  chosenZoom = level;
+  if (level) setZoom(level);
+  else zoomToFit();
+}}
 var hideDone = false;
 var selectedMembers = {{}};  // {{assignee: true}} for the team members whose stories are shown; empty shows all
 var memberCounts = {{}};  // {{assignee: count element}} in the badges
@@ -2416,8 +2471,28 @@ function applyFilters() {{
     task.points = totals.points;
   }});
   updateMemberCounts();
-  zoomToFit();
+  showShownDates();
+}}
+// Keep the timeline at the chosen zoom level, or fit it to the shown stories when no level is chosen
+function showShownDates() {{
+  if (!chosenZoom) {{
+    zoomToFit();
+    gantt.render();
+    return;
+  }}
+  // Keep the timeline and the day at its left edge. The timeline only grows, so stories that
+  // the filter shows again, such as done stories, are on it.
+  var leftDate = gantt.dateFromPos(gantt.getScrollState().x);
+  var project = shownDates();
+  if (project.start_date && project.start_date < gantt.config.start_date) {{
+    gantt.config.start_date = project.start_date;
+  }}
+  if (project.end_date) {{
+    var end = gantt.date.add(project.end_date, 1, "day");
+    if (end > gantt.config.end_date) gantt.config.end_date = end;
+  }}
   gantt.render();
+  gantt.scrollTo(gantt.posFromDate(leftDate), null);
 }}
 function shownDates() {{
   var start = null, end = null;
@@ -2458,6 +2533,11 @@ function zoomToFit() {{
 var searchTerm = "";
 var searchMatchIds = {{}};      // {{taskId: true}} for tasks whose own text matches
 var searchVisibleIds = {{}};    // {{taskId: true}} for matches + their ancestors (kept un-dimmed)
+function endsAfterDueDate(task) {{
+  if (!task.due_date) return false;
+  var dayAfterDue = gantt.date.add(gantt.date.str_to_date("%Y-%m-%d")(task.due_date), 1, "day");
+  return task.end_date > dayAfterDue;
+}}
 function changeBarClass(task) {{
   if (!showChanges) return "";
   if (task.removed) return " change-removed";
@@ -2472,7 +2552,10 @@ function joinClasses() {{
   return Array.prototype.filter.call(arguments, Boolean).join(" ");
 }}
 gantt.templates.task_class = function(start, end, task) {{
-  var base = (task.progress >= 1 ? "clickable-task task-done" : "clickable-task") + changeBarClass(task) +
+  // Red for ending after the due date wins over yellow for being behind the baseline
+  var pastDueDate = !task.removed && task.progress < 1 && endsAfterDueDate(task);
+  var base = (task.progress >= 1 ? "clickable-task task-done" : "clickable-task") +
+    (pastDueDate ? " due-late" : changeBarClass(task)) +
     (task.roadmap ? " roadmap-epic" : "") + (task.no_bar ? " no-bar" : "");
   if (!searchTerm) return base;
   if (searchMatchIds[task.id]) return base + " search-match";
@@ -2511,24 +2594,37 @@ function onSearchInput() {{
   }}
   var firstMatchId = null;
   var matchCount = 0;
-  gantt.eachTask(function(task) {{
-    var hay = ((task.text || "") + " " + (task.story_key || "") + " " + (task.badges_text || "")).toLowerCase();
-    if (hay.indexOf(raw) !== -1) {{
+  var opened = {{}};
+  // Each gantt.open() redraws the chart, so open the epics of all matches in one batch
+  gantt.batchUpdate(function() {{
+    gantt.eachTask(function(task) {{
+      if (task.$search_text === undefined) {{
+        task.$search_text = ((task.text || "") + " " + (task.story_key || "") + " " +
+          (task.badges_text || "")).toLowerCase();
+      }}
+      if (task.$search_text.indexOf(raw) === -1) return;
       searchMatchIds[task.id] = true;
       searchVisibleIds[task.id] = true;
       matchCount++;
       if (firstMatchId === null) firstMatchId = task.id;
       var p = gantt.getParent(task.id);
-      while (p && p !== gantt.config.root_id) {{
+      while (p && p !== gantt.config.root_id && !opened[p]) {{
+        opened[p] = true;
         searchVisibleIds[p] = true;
         gantt.open(p);
         p = gantt.getParent(p);
       }}
-    }}
+    }});
   }});
   countEl.textContent = matchCount === 1 ? "1 match" : matchCount + " matches";
   gantt.refreshData();
   if (firstMatchId !== null) gantt.showTask(firstMatchId);
+}}
+// Search when the typing pauses, not on every key
+var searchTimer = null;
+function onSearchTyping() {{
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(onSearchInput, 150);
 }}
 gantt.templates.task_text = function(start, end, task) {{
   if (task.removed || task.roadmap) return task.text;
@@ -2931,7 +3027,8 @@ def run_gantt(config_path, history_dir=None, since=None):
         icon_images = fetch_icon_images(icon_urls)
 
     write_gantt_html(scheduled, config.statuses, config.dependencies, config.holidays, config.status_colors,
-                     changes, snapshots, icon_images, epic_icon_url, epics_info, roadmap_epics, epic_order)
+                     changes, snapshots, icon_images, epic_icon_url, epics_info, roadmap_epics, epic_order,
+                     config.visuals)
 
 
 def run_velocity(config_path, weeks):
