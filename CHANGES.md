@@ -11,6 +11,7 @@ The tool has no version numbers yet. This file lists the changes per week, newes
   A row with its own color keeps that color.
 - Show the info popup of a story only over its bar and over its title in the Story column. The
   popup appears just under the row and follows the mouse along the row.
+- Show the points in the output of `velocity` with one decimal, so the table lines up.
 
 ## Week of 2026-11-09
 

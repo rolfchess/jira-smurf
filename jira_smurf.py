@@ -3159,12 +3159,12 @@ def run_velocity(config_path, weeks):
         hours = team_hours(week)
         iso_year, iso_week, _ = week.isocalendar()
         label = f"{iso_year}-W{iso_week:02d}"
-        print(f"{label:<10}  {hours:>6g}  {points[week]:>6g}  {ratio(hours, points[week]):>11}  "
+        print(f"{label:<10}  {hours:>6g}  {points[week]:>6.1f}  {ratio(hours, points[week]):>11}  "
               f"{unpointed[week]:>9}")
         total_hours += hours
         total_points += points[week]
         total_unpointed += unpointed[week]
-    print(f"{'Total':<10}  {total_hours:>6g}  {total_points:>6g}  {ratio(total_hours, total_points):>11}  "
+    print(f"{'Total':<10}  {total_hours:>6g}  {total_points:>6.1f}  {ratio(total_hours, total_points):>11}  "
           f"{total_unpointed:>9}")
     print()
     if total_points:
@@ -3174,7 +3174,7 @@ def run_velocity(config_path, weeks):
         print(f"No stories with story points were finished in the last {weeks} weeks.")
     if total_unpointed:
         stories = "story had" if total_unpointed == 1 else "stories had"
-        print(f"{total_unpointed} finished {stories} no story points. Each counts as {assumed_points:g} points: "
+        print(f"{total_unpointed} finished {stories} no story points. Each counts as {assumed_points:.1f} points: "
               f"default_hours {config.default_hours:g} divided by velocity {config.velocity:g}.")
 
 
