@@ -2,6 +2,11 @@
 
 The tool has no version numbers yet. This file lists the changes per week, newest first.
 
+## Week of 2026-11-16
+
+- Add `behind_baseline_blink` to `[visuals]`, to make the outline of a story that is behind the
+  baseline blink. It does not blink by default.
+
 ## Week of 2026-11-09
 
 - Add `[[badges]]` to `gantt.toml`. A badge marks the epics where a Jira field has a value, for

@@ -199,7 +199,7 @@ class GanttConfig:
     implementation_status: str  # status where open stories show their days of work in a badge, "" if not set
     exclude: list  # [key or project key, ...] — uppercase; stories that match are left out of the chart
     badges: list  # [{field, label, color, stripe}, ...] — badges on epic rows where a Jira field is set
-    visuals: dict  # {past_due_blink: bool, past_due_color: css_color, behind_baseline_color: css_color}
+    visuals: dict  # {past_due_blink, past_due_color, behind_baseline_blink, behind_baseline_color}
 
 
 def is_excluded(key, exclude):
@@ -494,11 +494,13 @@ def parse_badges(badges_raw, path):
     return badges
 
 
-DEFAULT_VISUALS = {"past_due_blink": True, "past_due_color": "#d62728", "behind_baseline_color": "#f2c200"}
+DEFAULT_VISUALS = {"past_due_blink": True, "past_due_color": "#d62728",
+                   "behind_baseline_blink": False, "behind_baseline_color": "#f2c200"}
 
 
 def parse_visuals(visuals_raw, path):
-    """Return the [visuals] of the configuration as {past_due_blink, past_due_color, behind_baseline_color}.
+    """Return the [visuals] of the configuration as
+    {past_due_blink, past_due_color, behind_baseline_blink, behind_baseline_color}.
 
     Each setting is optional and has the value of DEFAULT_VISUALS when it is left out.
     """
@@ -510,10 +512,10 @@ def parse_visuals(visuals_raw, path):
         print(f"Error: [visuals] in {path} has unknown settings: {', '.join(sorted(unknown))}", file=sys.stderr)
         sys.exit(1)
     visuals = dict(DEFAULT_VISUALS, **visuals_raw)
-    if not isinstance(visuals["past_due_blink"], bool):
-        print(f"Error: 'past_due_blink' in [visuals] must be true or false, got {visuals['past_due_blink']!r}",
-              file=sys.stderr)
-        sys.exit(1)
+    for name in ("past_due_blink", "behind_baseline_blink"):
+        if not isinstance(visuals[name], bool):
+            print(f"Error: '{name}' in [visuals] must be true or false, got {visuals[name]!r}", file=sys.stderr)
+            sys.exit(1)
     for name in ("past_due_color", "behind_baseline_color"):
         if not is_css_color(visuals[name]):
             print(f"Error: '{name}' in [visuals] must be a CSS color such as \"{DEFAULT_VISUALS[name]}\", "
@@ -1980,6 +1982,17 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     visuals = visuals or DEFAULT_VISUALS
     past_due = visuals["past_due_color"]
     behind = visuals["behind_baseline_color"]
+    behind_css = (f"  .gantt_task_line.change-late {{ box-shadow: 0 0 0 2px {behind}, "
+                  f"0 0 6px 3px color-mix(in srgb, {behind} 60%, transparent); }}")
+    if visuals["behind_baseline_blink"]:
+        behind_css = f"""  .gantt_task_line.change-late {{ box-shadow: 0 0 0 2px {behind}; animation: change-late-glow 0.5s ease-in-out infinite; }}
+  @keyframes change-late-glow {{
+    0%, 100% {{ box-shadow: 0 0 0 2px {behind}, 0 0 2px 1px color-mix(in srgb, {behind} 30%, transparent); }}
+    50% {{ box-shadow: 0 0 0 2px {behind}, 0 0 8px 4px color-mix(in srgb, {behind} 60%, transparent); }}
+  }}
+  @media (prefers-reduced-motion: reduce) {{
+    .gantt_task_line.change-late {{ animation: none; }}
+  }}"""
     past_due_css = (f"  .gantt_task_line.due-late {{ box-shadow: 0 0 0 2px {past_due}, "
                     f"0 0 6px 3px color-mix(in srgb, {past_due} 45%, transparent); }}")
     if visuals["past_due_blink"]:
@@ -2122,7 +2135,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   .gantt_task_line.roadmap-epic {{ opacity: 0.75;
     background-image: repeating-linear-gradient(45deg, rgba(255,255,255,0.45) 0 6px, transparent 6px 12px); }}
   .gantt_task_line.no-bar {{ display: none; }}
-  .gantt_task_line.change-late {{ box-shadow: 0 0 0 2px {behind}, 0 0 6px 3px color-mix(in srgb, {behind} 60%, transparent); }}
+{behind_css}
 {past_due_css}
   .delta-up {{ color: #c62828; font-weight: 600; }}
   .delta-down {{ color: #2e7d32; font-weight: 600; }}
