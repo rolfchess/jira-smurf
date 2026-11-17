@@ -9,6 +9,8 @@ The tool has no version numbers yet. This file lists the changes per week, newes
 - Show the baseline bar of a story in the dark shade of its bar color, not in gray.
 - Darken the whole row under the mouse in the Gantt chart, from the name to the end of the timeline.
   A row with its own color keeps that color.
+- Show the info popup of a story only over its bar and over its title in the Story column. The
+  popup appears just under the row and follows the mouse along the row.
 
 ## Week of 2026-11-09
 

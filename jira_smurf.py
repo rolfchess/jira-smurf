@@ -2133,6 +2133,9 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   /* The row under the mouse darkens in the grid and in the timeline. The row colors above have the
      #gantt_here prefix, so they win over the grey hover of dhtmlx, and this layer darkens them. */
   #gantt_here {{ --dhx-gantt-base-colors-hover-color: var(--dhx-gantt-task-row-background); }}
+  /* The info popup has the look of the dhtmlx tooltip (class gantt_tooltip); the page places it */
+  #task-popup {{ position: fixed; z-index: 10001; pointer-events: none; }}
+  #task-popup:not(.shown) {{ display: none; }}
   #gantt_here .gantt_row.row-hover, #gantt_here .gantt_task_row.row-hover {{
     background-image: linear-gradient(rgba(0, 0, 0, 0.07), rgba(0, 0, 0, 0.07)) !important;
   }}
@@ -2234,7 +2237,7 @@ function refreshChart() {{
 {trend}
 <script src="https://cdn.dhtmlx.com/gantt/9.0/dhtmlxgantt.js"></script>
 <script>
-gantt.plugins({{ tooltip: true, marker: true }});
+gantt.plugins({{ marker: true }});
 var typeIconImages = {icon_images_json};  // {{icon address: data URI}} of the issue type icons from Jira
 var showChanges = {show_changes_json};
 function signed(value, unit) {{
@@ -2267,7 +2270,7 @@ gantt.config.columns = [
         task.icon ? "<span class='type-icon'>" + task.icon + "</span>" : "";
       // The badges come before the name, so a long name does not hide them
       return icon + (task.badges_html || "") +
-        "<span title='" + task.text.replace(/'/g, "&#39;") + "'>" + task.text + "</span>";
+        "<span>" + task.text + "</span>";
     }} }},
   {{name: "status", label: "Status", align: "left", width: 120, resize: true}},
   {{name: "points", label: "Points", align: "center", width: 70, resize: true,
@@ -2771,6 +2774,47 @@ gantt.addMarker({{ start_date: new Date(), css: "today-marker", text: "Today" }}
   taskArea.addEventListener("mouseleave", function() {{
     ruler.style.display = "none";
   }});
+}})();
+// The info popup of a story or epic. It shows over a bar and over the title in the Story column, but not
+// over the text next to a bar or over a badge, which have their own tooltips. It is placed under the row
+// and follows the mouse along the row.
+(function() {{
+  var container = document.getElementById("gantt_here");
+  var popup = document.createElement("div");
+  popup.id = "task-popup";
+  popup.className = "gantt_tooltip";
+  document.body.appendChild(popup);
+  var shownId = null;
+  function hide() {{
+    popup.classList.remove("shown");
+    shownId = null;
+  }}
+  container.addEventListener("mousemove", function(e) {{
+    var spot = e.target.closest(".gantt_task_line, .gantt_grid_data .gantt_cell[data-column-name='text']");
+    if (!spot || e.target.closest(".gantt_side_content, .field-badge, .tree-buttons")) return hide();
+    var id = spot.closest("[data-task-id]").getAttribute("data-task-id");
+    if (!gantt.isTaskExists(id)) return hide();
+    if (id !== shownId) {{
+      var task = gantt.getTask(id);
+      var html = gantt.templates.tooltip_text(task.start_date, task.end_date, task);
+      if (!html) return hide();
+      // One block, so that the column layout of gantt_tooltip does not turn each <br/> into a line of its own
+      popup.innerHTML = "<div>" + html + "</div>";
+      popup.classList.add("shown");
+      shownId = id;
+    }}
+    var row = container.querySelector('.gantt_row[data-task-id="' + id + '"]') || spot;
+    var rowBox = row.getBoundingClientRect();
+    var gap = 4;
+    var top = rowBox.bottom + gap;
+    // Above the row when there is no room under it
+    if (top + popup.offsetHeight > window.innerHeight) top = rowBox.top - gap - popup.offsetHeight;
+    var left = Math.min(e.clientX + 12, window.innerWidth - popup.offsetWidth - 8);
+    popup.style.left = Math.max(8, left) + "px";
+    popup.style.top = top + "px";
+  }});
+  container.addEventListener("mouseleave", hide);
+  gantt.attachEvent("onGanttScroll", hide);
 }})();
 // Mark both halves of the row under the mouse, the grid row and the timeline row, with row-hover
 (function() {{
