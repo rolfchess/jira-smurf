@@ -678,16 +678,27 @@ CHANGELOG_BULK_SIZE = 1000  # the most issues that one bulk changelog call of Ji
 PARALLEL_CALLS = 4  # changelog calls at a time when the bulk changelog fails
 
 
+def history_day(created):
+    """Return the day of the "created" time of a Jira change history.
+
+    The time is text such as "2026-10-07T15:00:00.000+0200", or a number of milliseconds since
+    1970, as in the bulk changelog. A number gives the day in the time zone of this computer.
+    """
+    if isinstance(created, (int, float)) or str(created).isdigit():
+        return datetime.fromtimestamp(int(created) / 1000).date()
+    return date.fromisoformat(created[:10])
+
+
 def status_changes_from_histories(histories):
     """Return the status changes in a list of Jira change histories as (date, new status name), oldest first."""
     def order(history):
         # Jira numbers the histories in the order they were made, so the number orders changes on one day
         number = str(history.get("id", ""))
-        return history["created"][:10], int(number) if number.isdigit() else 0
+        return history_day(history["created"]), int(number) if number.isdigit() else 0
 
     changes = []
     for history in sorted(histories, key=order):
-        day = date.fromisoformat(history["created"][:10])
+        day = history_day(history["created"])
         for item in history.get("items", []):
             if item.get("field") == "status":
                 changes.append((day, item.get("toString") or ""))
