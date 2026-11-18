@@ -2315,6 +2315,23 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
 if (location.protocol.startsWith("http")) {{
   document.getElementById("refresh-button").hidden = false;
 }}
+// The error of a failed refresh. For an HTML page, the message is its title and the detail its text.
+function refreshError(response, text) {{
+  const isHtml = (response.headers.get("Content-Type") || "").includes("html") || /^\\s*</.test(text);
+  if (!isHtml) return new Error(text || response.statusText);
+  const page = new DOMParser().parseFromString(text, "text/html");
+  let body = "";
+  if (page.body) {{
+    page.body.querySelectorAll("script, style").forEach(element => element.remove());
+    // A space after each element keeps the words of two blocks, such as a heading and a paragraph, apart
+    page.body.querySelectorAll("*").forEach(element => element.after(" "));
+    body = page.body.textContent.replace(/\\s+/g, " ").trim();
+  }}
+  const title = page.title.trim();
+  const error = new Error(title || body || response.status + " " + response.statusText);
+  error.detail = title ? body : "";
+  return error;
+}}
 function refreshChart() {{
   const button = document.getElementById("refresh-button");
   const errorLine = document.getElementById("refresh-error");
@@ -2326,7 +2343,7 @@ function refreshChart() {{
   overlay.hidden = false;
   fetch("refresh", {{method: "POST", headers: {{"X-Jira-Smurf": "refresh"}}}})
     .then(response => response.text().then(text => {{
-      if (!response.ok) throw new Error(text || response.statusText);
+      if (!response.ok) throw refreshError(response, text);
       location.reload();
     }}))
     .catch(error => {{
@@ -2335,7 +2352,7 @@ function refreshChart() {{
       button.textContent = "Refresh from Jira";
       const message = "Refresh failed: " + error.message.replace(/\\s+/g, " ").trim();
       errorText.textContent = message;
-      errorText.title = message;
+      errorText.title = error.detail ? message + "\\n\\n" + error.detail : message;
       errorLine.hidden = false;
     }});
 }}

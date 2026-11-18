@@ -11,7 +11,8 @@ The tool has no version numbers yet. This file lists the changes per week, newes
   the color with `search_color` in `[visuals]`; it is violet by default.
 - Show the number of search matches under the search box, so the box does not move.
 - Show a failed refresh from Jira as one red line under the refresh button, with a × to close it.
-  Hover over the line to see the whole message.
+  Hover over the line to see the whole message. For an error page in HTML, the line shows the title
+  of the page, and the hover shows its text without the HTML tags.
 - Fetch the stories of the epics, the single stories, the sprint stories and the issue type icons
   4 calls at a time, not one after another.
 - Show the last day of a bar next to it in the Gantt chart. It showed the day after, one day later
