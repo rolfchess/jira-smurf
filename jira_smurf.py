@@ -16,6 +16,7 @@ import re
 import sys
 import threading
 import webbrowser
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 
@@ -73,6 +74,14 @@ def jira_get(path, params=None):
     """Make an authenticated GET request to the Jira REST API."""
     url = f"{JIRA_URL}/rest/api/3/{path}"
     resp = requests.get(url, params=params, auth=(JIRA_EMAIL, JIRA_API_TOKEN), timeout=30)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def jira_post(path, body):
+    """Make an authenticated POST request with a JSON body to the Jira REST API."""
+    url = f"{JIRA_URL}/rest/api/3/{path}"
+    resp = requests.post(url, json=body, auth=(JIRA_EMAIL, JIRA_API_TOKEN), timeout=60)
     resp.raise_for_status()
     return resp.json()
 
@@ -199,7 +208,7 @@ class GanttConfig:
     implementation_status: str  # status where open stories show their days of work in a badge, "" if not set
     exclude: list  # [key or project key, ...] — uppercase; stories that match are left out of the chart
     badges: list  # [{field, label, color, stripe}, ...] — badges on epic rows where a Jira field is set
-    visuals: dict  # {past_due_blink, past_due_color, behind_baseline_blink, behind_baseline_color}
+    visuals: dict  # {past_due_blink, past_due_color, behind_baseline_blink, behind_baseline_color, search_color}
 
 
 def is_excluded(key, exclude):
@@ -495,7 +504,7 @@ def parse_badges(badges_raw, path):
 
 
 DEFAULT_VISUALS = {"past_due_blink": True, "past_due_color": "#d62728",
-                   "behind_baseline_blink": False, "behind_baseline_color": "#f2c200"}
+                   "behind_baseline_blink": False, "behind_baseline_color": "#f2c200", "search_color": "#9c27b0"}
 
 
 def parse_visuals(visuals_raw, path):
@@ -516,7 +525,7 @@ def parse_visuals(visuals_raw, path):
         if not isinstance(visuals[name], bool):
             print(f"Error: '{name}' in [visuals] must be true or false, got {visuals[name]!r}", file=sys.stderr)
             sys.exit(1)
-    for name in ("past_due_color", "behind_baseline_color"):
+    for name in ("past_due_color", "behind_baseline_color", "search_color"):
         if not is_css_color(visuals[name]):
             print(f"Error: '{name}' in [visuals] must be a CSS color such as \"{DEFAULT_VISUALS[name]}\", "
                   f"got {visuals[name]!r}", file=sys.stderr)
@@ -665,23 +674,96 @@ def fetch_sprint_stories(include_open, include_future):
     return issues
 
 
+CHANGELOG_BULK_SIZE = 1000  # the most issues that one bulk changelog call of Jira takes
+PARALLEL_CALLS = 4  # the most calls to Jira at a time
+
+
+def history_day(created):
+    """Return the day of the "created" time of a Jira change history.
+
+    The time is text such as "2026-10-07T15:00:00.000+0200", or a number of milliseconds since
+    1970, as in the bulk changelog. A number gives the day in the time zone of this computer.
+    """
+    if isinstance(created, (int, float)) or str(created).isdigit():
+        return datetime.fromtimestamp(int(created) / 1000).date()
+    return date.fromisoformat(created[:10])
+
+
+def status_changes_from_histories(histories):
+    """Return the status changes in a list of Jira change histories as (date, new status name), oldest first."""
+    def order(history):
+        # Jira numbers the histories in the order they were made, so the number orders changes on one day
+        number = str(history.get("id", ""))
+        return history_day(history["created"]), int(number) if number.isdigit() else 0
+
+    changes = []
+    for history in sorted(histories, key=order):
+        day = history_day(history["created"])
+        for item in history.get("items", []):
+            if item.get("field") == "status":
+                changes.append((day, item.get("toString") or ""))
+    return changes
+
+
 def fetch_status_changes(issue_key):
     """Return the status changes of a story as a list of (date, new status name), oldest first."""
-    changes = []
+    histories = []
     start_at = 0
     while True:
         data = jira_get(f"issue/{issue_key}/changelog", params={"startAt": start_at, "maxResults": 100})
         values = data.get("values", [])
-        for history in values:
-            day = date.fromisoformat(history["created"][:10])
-            for item in history.get("items", []):
-                if item.get("field") == "status":
-                    changes.append((day, item.get("toString") or ""))
+        histories.extend(values)
         start_at += len(values)
         if data.get("isLast", True) or not values:
             break
-    changes.sort(key=lambda change: change[0])
-    return changes
+    return status_changes_from_histories(histories)
+
+
+def fetch_status_changes_bulk(issues):
+    """Return {issue key: status changes} for the given issues, from the bulk changelog of Jira.
+
+    issues are Jira issue dicts with an "id" and a "key". The status changes are as in
+    fetch_status_changes. This raises requests.RequestException when a call fails, and
+    ValueError when Jira answers in another form.
+    """
+    key_by_id = {str(issue["id"]): issue["key"] for issue in issues}
+    histories = {key: [] for key in key_by_id.values()}
+    ids = list(key_by_id)
+    for first in range(0, len(ids), CHANGELOG_BULK_SIZE):
+        body = {"issueIdsOrKeys": ids[first:first + CHANGELOG_BULK_SIZE], "fieldIds": ["status"],
+                "maxResults": 10000}
+        while True:
+            data = jira_post("changelog/bulkfetch", body)
+            if not isinstance(data.get("issueChangeLogs"), list):
+                raise ValueError("the answer has no issueChangeLogs")
+            for log in data["issueChangeLogs"]:
+                key = key_by_id.get(str(log.get("issueId")))
+                if key is None:
+                    raise ValueError(f"the answer has an unknown issue {log.get('issueId')!r}")
+                histories[key].extend(log.get("changeHistories") or [])
+            if not data.get("nextPageToken"):
+                break
+            body = dict(body, nextPageToken=data["nextPageToken"])
+    return {key: status_changes_from_histories(found) for key, found in histories.items()}
+
+
+def fetch_all_status_changes(issues):
+    """Return {issue key: status changes} for the given Jira issue dicts, which have an "id" and a "key".
+
+    The status changes are as in fetch_status_changes. This uses the bulk changelog of Jira,
+    one call per 1000 issues. When that fails, it fetches the changelog of each issue,
+    PARALLEL_CALLS at a time.
+    """
+    if not issues:
+        return {}
+    try:
+        return fetch_status_changes_bulk(issues)
+    except (requests.RequestException, ValueError, KeyError, TypeError) as e:
+        print(f"Warning: the bulk changelog of Jira failed ({e}), so the history of each story is fetched "
+              f"separately, {PARALLEL_CALLS} at a time", file=sys.stderr)
+    keys = [issue["key"] for issue in issues]
+    with ThreadPoolExecutor(max_workers=PARALLEL_CALLS) as pool:
+        return dict(zip(keys, pool.map(fetch_status_changes, keys)))
 
 
 def work_dates(status_changes, statuses, work_start_progress=0.0):
@@ -928,20 +1010,22 @@ def fetch_icon_images(urls):
 
     An icon that cannot be downloaded is left out, with a warning.
     """
-    images = {}
-    for url in sorted(set(urls)):
+    def download(url):
         try:
             resp = requests.get(url, auth=(JIRA_EMAIL, JIRA_API_TOKEN), timeout=30)
             resp.raise_for_status()
         except requests.RequestException as e:
             print(f"Warning: could not download icon {url}: {e}", file=sys.stderr)
-            continue
+            return None
         content_type = resp.headers.get("Content-Type", "").split(";")[0].strip()
         if not content_type.startswith("image/"):
             print(f"Warning: icon {url} is not an image ({content_type or 'no type'})", file=sys.stderr)
-            continue
-        images[url] = f"data:{content_type};base64,{base64.b64encode(resp.content).decode('ascii')}"
-    return images
+            return None
+        return f"data:{content_type};base64,{base64.b64encode(resp.content).decode('ascii')}"
+
+    urls = sorted(set(urls))
+    with ThreadPoolExecutor(max_workers=PARALLEL_CALLS) as pool:
+        return {url: image for url, image in zip(urls, pool.map(download, urls)) if image}
 
 
 def resolve_epic_for_issue(issue, epic_cache):
@@ -1982,6 +2066,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     visuals = visuals or DEFAULT_VISUALS
     past_due = visuals["past_due_color"]
     behind = visuals["behind_baseline_color"]
+    search = visuals["search_color"]
     behind_css = (f"  .gantt_task_line.change-late {{ box-shadow: 0 0 0 2px {behind}, "
                   f"0 0 6px 3px color-mix(in srgb, {behind} 60%, transparent); }}")
     if visuals["behind_baseline_blink"]:
@@ -2051,7 +2136,15 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   #toolbar button:hover {{ background: #e8e8e8; }}
   #toolbar button.active {{ background: #4e79a7; color: #fff; border-color: #4e79a7; }}
   #toolbar button:disabled {{ cursor: wait; color: #888; background: #f4f4f4; }}
-  #refresh-status {{ font-size: 12px; color: #c33; }}
+  /* A failed refresh: one line under the refresh button, cut off with … ; its tooltip has the whole message */
+  #refresh-error {{ display: flex; align-items: center; gap: 6px; margin: -6px 0 10px; font-size: 12px; color: #c33; }}
+  #refresh-error[hidden] {{ display: none; }}
+  #refresh-error-text {{ min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+  #refresh-error-close {{
+    flex: none; padding: 0 4px; border: none; background: none; color: #c33;
+    font-size: 16px; line-height: 1; cursor: pointer;
+  }}
+  #refresh-error-close:hover {{ color: #900; }}
   /* Covers the page while a refresh from Jira runs; the page reloads when it is done */
   #refresh-overlay {{
     position: fixed; inset: 0; z-index: 10000; display: flex; flex-direction: column;
@@ -2107,13 +2200,16 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   /* A darker shade of the blue-grey epic row background */
   .gantt_row.epic-row .points-badge {{ border-color: #52677f; background: #52677f; color: #fff; }}
   #show-done-wrap {{ display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }}
-  #search-wrap {{ display: flex; align-items: center; gap: 6px; margin-left: auto; }}
+  #search-wrap {{ position: relative; margin-left: auto; }}
   #search-input {{
     padding: 5px 10px; border: 1px solid #ccc; border-radius: 4px;
     font-size: 13px; min-width: 220px;
   }}
   #search-input:focus {{ outline: none; border-color: #4e79a7; }}
-  #search-count {{ font-size: 12px; color: #666; min-width: 70px; }}
+  /* While the search box has text, it and the rows it found have a frame in the search color */
+  #search-input.searching {{ border-color: {search}; box-shadow: 0 0 0 1px {search}; }}
+  /* Under the search box, so a longer count does not move the box */
+  #search-count {{ position: absolute; top: 100%; right: 0; margin-top: 2px; font-size: 12px; color: #666; white-space: nowrap; }}
   #member-filter {{ margin-bottom: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; }}
   #member-filter .filter-label {{ color: #666; margin-right: 4px; }}
   .member-badge {{
@@ -2124,15 +2220,22 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   .member-badge.active {{ background: #4e79a7; color: #fff; border-color: #4e79a7; }}
   .member-badge .count {{ margin-left: 4px; opacity: 0.7; }}
   #member-clear {{ border: none; background: none; color: #4e79a7; cursor: pointer; font-size: 12px; text-decoration: underline; }}
-  .gantt_task_line.search-match {{ outline: 3px solid #ffd400; outline-offset: 2px; z-index: 50; }}
   .gantt_task_line.search-dim {{ opacity: 0.2; }}
-  .gantt_row.search-match-row {{ background: #fff7c2 !important; font-weight: 600; }}
   .gantt_row.search-dim-row {{ opacity: 0.45; }}
+  /* One frame around a found row: the grid half has no right edge, the timeline half no left edge */
+  #gantt_here .gantt_row.search-match-row::after, #gantt_here .gantt_task_row.search-match-row::after {{
+    content: ""; position: absolute; inset: 0; z-index: 1; pointer-events: none; border: 2px solid {search};
+  }}
+  #gantt_here .gantt_row.search-match-row::after {{ border-right: none; }}
+  #gantt_here .gantt_task_row.search-match-row::after {{ border-left: none; }}
   #show-changes-wrap {{ display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }}
   #gantt_here .gantt_row.change-new-row, #gantt_here .gantt_task_row.change-new-row {{ background: #fff3bf; }}
   /* The row under the mouse darkens in the grid and in the timeline. The row colors above have the
      #gantt_here prefix, so they win over the grey hover of dhtmlx, and this layer darkens them. */
   #gantt_here {{ --dhx-gantt-base-colors-hover-color: var(--dhx-gantt-task-row-background); }}
+  /* The info popup has the look of the dhtmlx tooltip (class gantt_tooltip); the page places it */
+  #task-popup {{ position: fixed; z-index: 10001; pointer-events: none; }}
+  #task-popup:not(.shown) {{ display: none; }}
   #gantt_here .gantt_row.row-hover, #gantt_here .gantt_task_row.row-hover {{
     background-image: linear-gradient(rgba(0, 0, 0, 0.07), rgba(0, 0, 0, 0.07)) !important;
   }}
@@ -2183,7 +2286,6 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
 <h2>Gantt Chart — {date.today()}</h2>
 <div id="toolbar">
   <button id="refresh-button" hidden onclick="refreshChart()" title="Fetch the stories from Jira again and redraw the chart">Refresh from Jira</button>
-  <span id="refresh-status"></span>
   <div class="zoom-buttons">
     <button onclick="chooseZoom('day')">Day</button>
     <button onclick="chooseZoom('week')">Week</button>
@@ -2198,6 +2300,11 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     <span id="search-count"></span>
   </div>
 </div>
+<div id="refresh-error" hidden role="alert">
+  <span id="refresh-error-text"></span>
+  <button id="refresh-error-close" title="Close" aria-label="Close"
+    onclick="document.getElementById('refresh-error').hidden = true">&times;</button>
+</div>
 <div id="member-filter"></div>
 <div id="refresh-overlay" hidden role="status" aria-live="polite">
   <div class="spinner"></div>
@@ -2208,24 +2315,45 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
 if (location.protocol.startsWith("http")) {{
   document.getElementById("refresh-button").hidden = false;
 }}
+// The error of a failed refresh. For an HTML page, the message is its title and the detail its text.
+function refreshError(response, text) {{
+  const isHtml = (response.headers.get("Content-Type") || "").includes("html") || /^\\s*</.test(text);
+  if (!isHtml) return new Error(text || response.statusText);
+  const page = new DOMParser().parseFromString(text, "text/html");
+  let body = "";
+  if (page.body) {{
+    page.body.querySelectorAll("script, style").forEach(element => element.remove());
+    // A space after each element keeps the words of two blocks, such as a heading and a paragraph, apart
+    page.body.querySelectorAll("*").forEach(element => element.after(" "));
+    body = page.body.textContent.replace(/\\s+/g, " ").trim();
+  }}
+  const title = page.title.trim();
+  const error = new Error(title || body || response.status + " " + response.statusText);
+  error.detail = title ? body : "";
+  return error;
+}}
 function refreshChart() {{
   const button = document.getElementById("refresh-button");
-  const status = document.getElementById("refresh-status");
+  const errorLine = document.getElementById("refresh-error");
+  const errorText = document.getElementById("refresh-error-text");
   const overlay = document.getElementById("refresh-overlay");
   button.disabled = true;
   button.textContent = "Refreshing…";
-  status.textContent = "";
+  errorLine.hidden = true;
   overlay.hidden = false;
   fetch("refresh", {{method: "POST", headers: {{"X-Jira-Smurf": "refresh"}}}})
     .then(response => response.text().then(text => {{
-      if (!response.ok) throw new Error(text || response.statusText);
+      if (!response.ok) throw refreshError(response, text);
       location.reload();
     }}))
     .catch(error => {{
       overlay.hidden = true;
       button.disabled = false;
       button.textContent = "Refresh from Jira";
-      status.textContent = "Refresh failed: " + error.message;
+      const message = "Refresh failed: " + error.message.replace(/\\s+/g, " ").trim();
+      errorText.textContent = message;
+      errorText.title = error.detail ? message + "\\n\\n" + error.detail : message;
+      errorLine.hidden = false;
     }});
 }}
 </script>
@@ -2234,7 +2362,7 @@ function refreshChart() {{
 {trend}
 <script src="https://cdn.dhtmlx.com/gantt/9.0/dhtmlxgantt.js"></script>
 <script>
-gantt.plugins({{ tooltip: true, marker: true }});
+gantt.plugins({{ marker: true }});
 var typeIconImages = {icon_images_json};  // {{icon address: data URI}} of the issue type icons from Jira
 var showChanges = {show_changes_json};
 function signed(value, unit) {{
@@ -2267,7 +2395,7 @@ gantt.config.columns = [
         task.icon ? "<span class='type-icon'>" + task.icon + "</span>" : "";
       // The badges come before the name, so a long name does not hide them
       return icon + (task.badges_html || "") +
-        "<span title='" + task.text.replace(/'/g, "&#39;") + "'>" + task.text + "</span>";
+        "<span>" + task.text + "</span>";
     }} }},
   {{name: "status", label: "Status", align: "left", width: 120, resize: true}},
   {{name: "points", label: "Points", align: "center", width: 70, resize: true,
@@ -2387,6 +2515,12 @@ function isStoryShown(task) {{
 }}
 function isTaskShown(task) {{
   if (task.removed) return showChanges;
+  // A search shows its matches and their epics, also when a filter hides them
+  if (searchVisibleIds[task.id]) return true;
+  return isTaskShownByFilters(task);
+}}
+// Whether the filters show a story or epic that is still in the plan, apart from a search.
+function isTaskShownByFilters(task) {{
   if (!isFiltering()) return true;
   // An epic without stories has no team member
   if (task.roadmap) return Object.keys(selectedMembers).length === 0;
@@ -2502,14 +2636,7 @@ function showShownDates() {{
   // Keep the timeline and the day at its left edge. The timeline only grows, so stories that
   // the filter shows again, such as done stories, are on it.
   var leftDate = gantt.dateFromPos(gantt.getScrollState().x);
-  var project = shownDates();
-  if (project.start_date && project.start_date < gantt.config.start_date) {{
-    gantt.config.start_date = project.start_date;
-  }}
-  if (project.end_date) {{
-    var end = gantt.date.add(project.end_date, 1, "day");
-    if (end > gantt.config.end_date) gantt.config.end_date = end;
-  }}
+  growTimeline();
   gantt.render();
   gantt.scrollTo(gantt.posFromDate(leftDate), null);
 }}
@@ -2576,9 +2703,7 @@ gantt.templates.task_class = function(start, end, task) {{
   var base = (task.progress >= 1 ? "clickable-task task-done" : "clickable-task") +
     (pastDueDate ? " due-late" : changeBarClass(task)) +
     (task.roadmap ? " roadmap-epic" : "") + (task.no_bar ? " no-bar" : "");
-  if (!searchTerm) return base;
-  if (searchMatchIds[task.id]) return base + " search-match";
-  if (searchVisibleIds[task.id]) return base;
+  if (!searchTerm || searchVisibleIds[task.id]) return base;
   return base + " search-dim";
 }};
 var statusClasses = {status_classes_json};  // {{lowercase status: CSS class}} for the row background
@@ -2590,7 +2715,8 @@ function epicRowClass(task) {{
   return task.is_epic ? "epic-row" : "";
 }}
 gantt.templates.task_row_class = function(start, end, task) {{
-  return joinClasses(epicRowClass(task), statusRowClass(task), changeRowClass(task));
+  return joinClasses(epicRowClass(task), statusRowClass(task), changeRowClass(task),
+    searchTerm && searchMatchIds[task.id] ? "search-match-row" : "");
 }};
 gantt.templates.grid_row_class = function(start, end, task) {{
   var base = joinClasses(epicRowClass(task), task.progress >= 1 ? "task-done-row" : "",
@@ -2603,6 +2729,7 @@ gantt.templates.grid_row_class = function(start, end, task) {{
 function onSearchInput() {{
   var raw = document.getElementById("search-input").value.trim().toLowerCase();
   searchTerm = raw;
+  document.getElementById("search-input").classList.toggle("searching", !!raw);
   searchMatchIds = {{}};
   searchVisibleIds = {{}};
   var countEl = document.getElementById("search-count");
@@ -2613,6 +2740,7 @@ function onSearchInput() {{
   }}
   var firstMatchId = null;
   var matchCount = 0;
+  var hiddenCount = 0;
   var opened = {{}};
   // Each gantt.open() redraws the chart, so open the epics of all matches in one batch
   gantt.batchUpdate(function() {{
@@ -2625,6 +2753,7 @@ function onSearchInput() {{
       searchMatchIds[task.id] = true;
       searchVisibleIds[task.id] = true;
       matchCount++;
+      if (!task.removed && !isTaskShownByFilters(task)) hiddenCount++;
       if (firstMatchId === null) firstMatchId = task.id;
       var p = gantt.getParent(task.id);
       while (p && p !== gantt.config.root_id && !opened[p]) {{
@@ -2635,9 +2764,29 @@ function onSearchInput() {{
       }}
     }});
   }});
-  countEl.textContent = matchCount === 1 ? "1 match" : matchCount + " matches";
+  countEl.textContent = (matchCount === 1 ? "1 match" : matchCount + " matches") +
+    (hiddenCount ? " (" + hiddenCount + " hidden by filters)" : "");
   gantt.refreshData();
+  // A match that a filter hides can be outside the timeline, for example a done story
+  if (hiddenCount && growTimeline()) gantt.render();
   if (firstMatchId !== null) gantt.showTask(firstMatchId);
+}}
+// Make the timeline as wide as the shown stories, without making it smaller. Return true when it grew.
+function growTimeline() {{
+  var project = shownDates();
+  var grown = false;
+  if (project.start_date && project.start_date < gantt.config.start_date) {{
+    gantt.config.start_date = project.start_date;
+    grown = true;
+  }}
+  if (project.end_date) {{
+    var end = gantt.date.add(project.end_date, 1, "day");
+    if (end > gantt.config.end_date) {{
+      gantt.config.end_date = end;
+      grown = true;
+    }}
+  }}
+  return grown;
 }}
 // Search when the typing pauses, not on every key
 var searchTimer = null;
@@ -2679,7 +2828,8 @@ gantt.templates.rightside_text = function(start, end, task) {{
       " <span class='impl-badge" + (diff > 0 ? " impl-over" : "") + "' title='" + title + "'>impl " +
       task.implementation_days + "/" + task.estimate_days + "d</span>";
   }}
-  parts.push(gantt.date.date_to_str("%d %M")(end));
+  // end is the day after the last day of the bar, as in the info popup
+  parts.push(gantt.date.date_to_str("%d %M")(gantt.date.add(end, -1, "day")));
   return "<span style='font-size:11px;color:#666;'>" + parts.join(" \u2022 ") + "</span>";
 }};
 var holidays = new Set({holidays_json});
@@ -2772,6 +2922,47 @@ gantt.addMarker({{ start_date: new Date(), css: "today-marker", text: "Today" }}
     ruler.style.display = "none";
   }});
 }})();
+// The info popup of a story or epic. It shows over a bar and over the title in the Story column, but not
+// over the text next to a bar or over a badge, which have their own tooltips. It is placed under the row
+// and follows the mouse along the row.
+(function() {{
+  var container = document.getElementById("gantt_here");
+  var popup = document.createElement("div");
+  popup.id = "task-popup";
+  popup.className = "gantt_tooltip";
+  document.body.appendChild(popup);
+  var shownId = null;
+  function hide() {{
+    popup.classList.remove("shown");
+    shownId = null;
+  }}
+  container.addEventListener("mousemove", function(e) {{
+    var spot = e.target.closest(".gantt_task_line, .gantt_grid_data .gantt_cell[data-column-name='text']");
+    if (!spot || e.target.closest(".gantt_side_content, .field-badge, .tree-buttons")) return hide();
+    var id = spot.closest("[data-task-id]").getAttribute("data-task-id");
+    if (!gantt.isTaskExists(id)) return hide();
+    if (id !== shownId) {{
+      var task = gantt.getTask(id);
+      var html = gantt.templates.tooltip_text(task.start_date, task.end_date, task);
+      if (!html) return hide();
+      // One block, so that the column layout of gantt_tooltip does not turn each <br/> into a line of its own
+      popup.innerHTML = "<div>" + html + "</div>";
+      popup.classList.add("shown");
+      shownId = id;
+    }}
+    var row = container.querySelector('.gantt_row[data-task-id="' + id + '"]') || spot;
+    var rowBox = row.getBoundingClientRect();
+    var gap = 4;
+    var top = rowBox.bottom + gap;
+    // Above the row when there is no room under it
+    if (top + popup.offsetHeight > window.innerHeight) top = rowBox.top - gap - popup.offsetHeight;
+    var left = Math.min(e.clientX + 12, window.innerWidth - popup.offsetWidth - 8);
+    popup.style.left = Math.max(8, left) + "px";
+    popup.style.top = top + "px";
+  }});
+  container.addEventListener("mouseleave", hide);
+  gantt.attachEvent("onGanttScroll", hide);
+}})();
 // Mark both halves of the row under the mouse, the grid row and the timeline row, with row-hover
 (function() {{
   var container = document.getElementById("gantt_here");
@@ -2811,7 +3002,8 @@ applyFilters();
 }})();
 document.getElementById("gantt_here").addEventListener("click", function(e) {{
   var bar = e.target.closest(".gantt_task_line");
-  if (!bar) return;
+  // The labels next to a bar are inside its element, but only the bar itself opens the story
+  if (!bar || e.target.closest(".gantt_side_content")) return;
   var id = bar.getAttribute("task_id");
   if (!id) return;
   try {{
@@ -2856,13 +3048,28 @@ def run_gantt(config_path, history_dir=None, since=None):
     """
     config = load_gantt_config(config_path)
 
+    # Fetch the stories of the epics, the single stories and the sprint stories, PARALLEL_CALLS calls
+    # at a time. The results are added below in this order, as when they were fetched one by one.
+    include_sprints = config.include_open_sprints or config.include_future_sprints
+    with ThreadPoolExecutor(max_workers=PARALLEL_CALLS) as pool:
+        if config.epics:
+            print(f"Fetching the stories of {len(config.epics)} "
+                  f"{'epic' if len(config.epics) == 1 else 'epics'}...", file=sys.stderr)
+        epic_results = pool.map(fetch_stories_for_epic, config.epics)
+        if config.stories:
+            print(f"Fetching {len(config.stories)} individual stories...", file=sys.stderr)
+        individual_result = pool.submit(fetch_stories_by_keys, config.stories) if config.stories else None
+        if include_sprints:
+            print("Fetching sprint stories...", file=sys.stderr)
+        sprint_result = (pool.submit(fetch_sprint_stories, config.include_open_sprints,
+                                     config.include_future_sprints) if include_sprints else None)
+        epic_results = list(epic_results)
+
     # Expand epics into stories
     ordered_keys = []
     story_data = {}
     empty_epics = []
-    for epic_key in config.epics:
-        print(f"Fetching stories for epic {epic_key}...", file=sys.stderr)
-        epic_issues = fetch_stories_for_epic(epic_key)
+    for epic_key, epic_issues in zip(config.epics, epic_results):
         if not epic_issues:
             empty_epics.append(epic_key)
             continue
@@ -2873,20 +3080,18 @@ def run_gantt(config_path, history_dir=None, since=None):
                 ordered_keys.append(key)
                 story_data[key] = issue
 
-    # Fetch individual stories
-    if config.stories:
-        print(f"Fetching {len(config.stories)} individual stories...", file=sys.stderr)
-        individual = fetch_stories_by_keys(config.stories)
+    # Add individual stories
+    if individual_result:
+        individual = individual_result.result()
         for key in config.stories:
             if key in individual and key not in story_data:
                 ordered_keys.append(key)
                 story_data[key] = individual[key]
 
-    # Fetch stories in open and future sprints
-    if config.include_open_sprints or config.include_future_sprints:
-        print("Fetching sprint stories...", file=sys.stderr)
+    # Add stories in open and future sprints
+    if sprint_result:
         added = 0
-        for issue in fetch_sprint_stories(config.include_open_sprints, config.include_future_sprints):
+        for issue in sprint_result.result():
             key = issue["key"]
             if key not in story_data:
                 ordered_keys.append(key)
@@ -2948,38 +3153,40 @@ def run_gantt(config_path, history_dir=None, since=None):
         issue["_epic_key"] = (parent.get("key", "") if parent
                               else issue["fields"].get("customfield_10014", ""))
 
-    # Place done stories on the days they were worked on, from their status history
-    done_keys = [key for key in ordered_keys
-                 if config.statuses.get(story_data[key]["fields"].get("status", {}).get("name", "").lower(), 0) >= 1.0]
-    done_dates = {}
-    if done_keys:
-        print(f"Fetching the status history of {len(done_keys)} done stories...", file=sys.stderr)
-        for key in done_keys:
-            dates = work_dates(fetch_status_changes(key), config.statuses, config.work_start_progress)
-            if dates:
-                done_dates[key] = dates
-        missing = len(done_keys) - len(done_dates)
-        if missing:
-            print(f"  {missing} done {'story has' if missing == 1 else 'stories have'} no change to a done status "
-                  f"in the history, so the plan start is used", file=sys.stderr)
+    # The status history is needed for the done stories, and for the open stories that are at the
+    # implementation status or a later one: only those can have spent time there
+    def progress_of(key):
+        return config.statuses.get(story_data[key]["fields"].get("status", {}).get("name", "").lower(), 0)
 
-    # Find the stretches open stories spent in the implementation status or a later one, from their
-    # status history. Only stories that are at least that far along can have been there, so only
-    # those are fetched.
+    done_keys = [key for key in ordered_keys if progress_of(key) >= 1.0]
+    open_keys = []
     if config.implementation_status:
         impl_progress = config.statuses[config.implementation_status.lower()]
-        open_keys = [key for key in ordered_keys
-                     if impl_progress <= config.statuses.get(
-                         story_data[key]["fields"].get("status", {}).get("name", "").lower(), 0) < 1.0]
-        if open_keys:
-            print(f"Fetching the status history of {len(open_keys)} open stories...", file=sys.stderr)
-            for key in open_keys:
-                stretches = implementation_stretches(fetch_status_changes(key), config.implementation_status,
-                                                     config.statuses)
-                if stretches:
-                    story_data[key]["_implementation_date"] = stretches[0][0].isoformat()
-                    story_data[key]["_implementation_stretches"] = [
-                        [start.isoformat(), end.isoformat() if end else ""] for start, end in stretches]
+        open_keys = [key for key in ordered_keys if impl_progress <= progress_of(key) < 1.0]
+    status_changes = {}
+    if done_keys or open_keys:
+        print(f"Fetching the status history of {len(done_keys)} done and {len(open_keys)} open "
+              f"{'story' if len(done_keys) + len(open_keys) == 1 else 'stories'}...", file=sys.stderr)
+        status_changes = fetch_all_status_changes([story_data[key] for key in done_keys + open_keys])
+
+    # Place done stories on the days they were worked on, from their status history
+    done_dates = {}
+    for key in done_keys:
+        dates = work_dates(status_changes[key], config.statuses, config.work_start_progress)
+        if dates:
+            done_dates[key] = dates
+    missing = len(done_keys) - len(done_dates)
+    if missing:
+        print(f"  {missing} done {'story has' if missing == 1 else 'stories have'} no change to a done status "
+              f"in the history, so the plan start is used", file=sys.stderr)
+
+    # Find the stretches open stories spent in the implementation status or a later one
+    for key in open_keys:
+        stretches = implementation_stretches(status_changes[key], config.implementation_status, config.statuses)
+        if stretches:
+            story_data[key]["_implementation_date"] = stretches[0][0].isoformat()
+            story_data[key]["_implementation_stretches"] = [
+                [start.isoformat(), end.isoformat() if end else ""] for start, end in stretches]
 
     # The planner takes stories in this order; the story rows keep the order of the configuration file
     schedule_keys = ordered_keys
@@ -3087,6 +3294,7 @@ def run_velocity(config_path, weeks):
     print(f"Fetching the stories finished from {start} to {end - timedelta(days=1)}...", file=sys.stderr)
     week_starts = [start + timedelta(weeks=i) for i in range(weeks)]
     points = {w: 0.0 for w in week_starts}
+    pointed = {w: 0 for w in week_starts}
     unpointed = {w: 0 for w in week_starts}
     for issue in fetch_finished_stories(start, end):
         fields = issue["fields"]
@@ -3100,6 +3308,8 @@ def run_velocity(config_path, weeks):
         if story_points is None:
             unpointed[week] += 1
             story_points = assumed_points
+        else:
+            pointed[week] += 1
         points[week] += story_points
 
     def team_hours(first_day):
@@ -3109,19 +3319,20 @@ def run_velocity(config_path, weeks):
     def ratio(hours, pts):
         return f"{hours / pts:.1f}" if pts else "-"
 
-    print(f"{'Week':<10}  {'Hours':>6}  {'Points':>6}  {'Hours/point':>11}  {'No points':>9}")
-    total_hours = total_points = total_unpointed = 0
+    print(f"{'Week':<10}  {'Hours':>6}  {'Stories':>7}  {'Points':>6}  {'Hours/point':>11}  {'No points':>9}")
+    total_hours = total_points = total_pointed = total_unpointed = 0
     for week in week_starts:
         hours = team_hours(week)
         iso_year, iso_week, _ = week.isocalendar()
         label = f"{iso_year}-W{iso_week:02d}"
-        print(f"{label:<10}  {hours:>6g}  {points[week]:>6g}  {ratio(hours, points[week]):>11}  "
-              f"{unpointed[week]:>9}")
+        print(f"{label:<10}  {hours:>6g}  {pointed[week]:>7}  {points[week]:>6.1f}  "
+              f"{ratio(hours, points[week]):>11}  {unpointed[week]:>9}")
         total_hours += hours
         total_points += points[week]
+        total_pointed += pointed[week]
         total_unpointed += unpointed[week]
-    print(f"{'Total':<10}  {total_hours:>6g}  {total_points:>6g}  {ratio(total_hours, total_points):>11}  "
-          f"{total_unpointed:>9}")
+    print(f"{'Total':<10}  {total_hours:>6g}  {total_pointed:>7}  {total_points:>6.1f}  "
+          f"{ratio(total_hours, total_points):>11}  {total_unpointed:>9}")
     print()
     if total_points:
         print(f"Velocity over the last {weeks} weeks: {total_hours / total_points:.1f} hours per story point. "
@@ -3130,7 +3341,7 @@ def run_velocity(config_path, weeks):
         print(f"No stories with story points were finished in the last {weeks} weeks.")
     if total_unpointed:
         stories = "story had" if total_unpointed == 1 else "stories had"
-        print(f"{total_unpointed} finished {stories} no story points. Each counts as {assumed_points:g} points: "
+        print(f"{total_unpointed} finished {stories} no story points. Each counts as {assumed_points:.1f} points: "
               f"default_hours {config.default_hours:g} divided by velocity {config.velocity:g}.")
 
 

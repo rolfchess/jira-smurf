@@ -8,7 +8,8 @@ The Day, Week, Month and Quarter buttons set the scale of the chart. A filter th
 and the dates in view. Scroll to see stories outside them. Until you pick a scale, a filter fits the
 chart to the stories that are shown. After Fit All, it does the same.
 
-The row under the mouse is darker across the whole chart. Click a bar to open its Jira issue. Issue icons are embedded in the page so they work without a Jira
+The row under the mouse is darker across the whole chart. Point at a bar, or at a title in the Story
+column, to see the dates and changes of that story under its row. Click a bar to open its Jira issue. Issue icons are embedded in the page so they work without a Jira
 login; an emoji is used when an icon cannot be downloaded.
 
 ## What the chart shows
@@ -24,7 +25,9 @@ login; an emoji is used when an icon cannot be downloaded.
 - Colors remain when printing or saving as PDF.
 
 The Sprint column shows a story's latest sprint number. The Status column shows its current Jira
-status. Search also matches epic badges.
+status. Search also matches epic badges. A search also shows the stories it finds that a filter
+hides, such as done stories, until you clear the search box. The rows it finds have a frame in the
+color of the search box, violet by default.
 
 ## Refreshing in the browser
 
