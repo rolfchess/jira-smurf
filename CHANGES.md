@@ -9,6 +9,7 @@ The tool has no version numbers yet. This file lists the changes per week, newes
 - Mark the rows that a search finds with a frame in the search color, not with a yellow background,
   and give the search box the same color while it has text. The bars keep their own outlines. Set
   the color with `search_color` in `[visuals]`; it is violet by default.
+- Show the number of search matches under the search box, so the box does not move.
 - Fetch the stories of the epics, the single stories, the sprint stories and the issue type icons
   4 calls at a time, not one after another.
 - Show the last day of a bar next to it in the Gantt chart. It showed the day after, one day later

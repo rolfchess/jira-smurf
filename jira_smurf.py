@@ -2192,7 +2192,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   /* A darker shade of the blue-grey epic row background */
   .gantt_row.epic-row .points-badge {{ border-color: #52677f; background: #52677f; color: #fff; }}
   #show-done-wrap {{ display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }}
-  #search-wrap {{ display: flex; align-items: center; gap: 6px; margin-left: auto; }}
+  #search-wrap {{ position: relative; margin-left: auto; }}
   #search-input {{
     padding: 5px 10px; border: 1px solid #ccc; border-radius: 4px;
     font-size: 13px; min-width: 220px;
@@ -2200,7 +2200,8 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   #search-input:focus {{ outline: none; border-color: #4e79a7; }}
   /* While the search box has text, it and the rows it found have a frame in the search color */
   #search-input.searching {{ border-color: {search}; box-shadow: 0 0 0 1px {search}; }}
-  #search-count {{ font-size: 12px; color: #666; min-width: 70px; }}
+  /* Under the search box, so a longer count does not move the box */
+  #search-count {{ position: absolute; top: 100%; right: 0; margin-top: 2px; font-size: 12px; color: #666; white-space: nowrap; }}
   #member-filter {{ margin-bottom: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; }}
   #member-filter .filter-label {{ color: #666; margin-right: 4px; }}
   .member-badge {{
