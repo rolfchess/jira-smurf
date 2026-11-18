@@ -4,6 +4,8 @@ The tool has no version numbers yet. This file lists the changes per week, newes
 
 ## Week of 2026-11-16
 
+- Fetch the stories of the epics, the single stories, the sprint stories and the issue type icons
+  4 calls at a time, not one after another.
 - Show the last day of a bar next to it in the Gantt chart. It showed the day after, one day later
   than the info popup.
 - Open a story in Jira only with a click on its bar, not on the labels next to the bar.

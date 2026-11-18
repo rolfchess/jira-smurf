@@ -675,7 +675,7 @@ def fetch_sprint_stories(include_open, include_future):
 
 
 CHANGELOG_BULK_SIZE = 1000  # the most issues that one bulk changelog call of Jira takes
-PARALLEL_CALLS = 4  # changelog calls at a time when the bulk changelog fails
+PARALLEL_CALLS = 4  # the most calls to Jira at a time
 
 
 def history_day(created):
@@ -1010,20 +1010,22 @@ def fetch_icon_images(urls):
 
     An icon that cannot be downloaded is left out, with a warning.
     """
-    images = {}
-    for url in sorted(set(urls)):
+    def download(url):
         try:
             resp = requests.get(url, auth=(JIRA_EMAIL, JIRA_API_TOKEN), timeout=30)
             resp.raise_for_status()
         except requests.RequestException as e:
             print(f"Warning: could not download icon {url}: {e}", file=sys.stderr)
-            continue
+            return None
         content_type = resp.headers.get("Content-Type", "").split(";")[0].strip()
         if not content_type.startswith("image/"):
             print(f"Warning: icon {url} is not an image ({content_type or 'no type'})", file=sys.stderr)
-            continue
-        images[url] = f"data:{content_type};base64,{base64.b64encode(resp.content).decode('ascii')}"
-    return images
+            return None
+        return f"data:{content_type};base64,{base64.b64encode(resp.content).decode('ascii')}"
+
+    urls = sorted(set(urls))
+    with ThreadPoolExecutor(max_workers=PARALLEL_CALLS) as pool:
+        return {url: image for url, image in zip(urls, pool.map(download, urls)) if image}
 
 
 def resolve_epic_for_issue(issue, epic_cache):
@@ -2984,13 +2986,28 @@ def run_gantt(config_path, history_dir=None, since=None):
     """
     config = load_gantt_config(config_path)
 
+    # Fetch the stories of the epics, the single stories and the sprint stories, PARALLEL_CALLS calls
+    # at a time. The results are added below in this order, as when they were fetched one by one.
+    include_sprints = config.include_open_sprints or config.include_future_sprints
+    with ThreadPoolExecutor(max_workers=PARALLEL_CALLS) as pool:
+        if config.epics:
+            print(f"Fetching the stories of {len(config.epics)} "
+                  f"{'epic' if len(config.epics) == 1 else 'epics'}...", file=sys.stderr)
+        epic_results = pool.map(fetch_stories_for_epic, config.epics)
+        if config.stories:
+            print(f"Fetching {len(config.stories)} individual stories...", file=sys.stderr)
+        individual_result = pool.submit(fetch_stories_by_keys, config.stories) if config.stories else None
+        if include_sprints:
+            print("Fetching sprint stories...", file=sys.stderr)
+        sprint_result = (pool.submit(fetch_sprint_stories, config.include_open_sprints,
+                                     config.include_future_sprints) if include_sprints else None)
+        epic_results = list(epic_results)
+
     # Expand epics into stories
     ordered_keys = []
     story_data = {}
     empty_epics = []
-    for epic_key in config.epics:
-        print(f"Fetching stories for epic {epic_key}...", file=sys.stderr)
-        epic_issues = fetch_stories_for_epic(epic_key)
+    for epic_key, epic_issues in zip(config.epics, epic_results):
         if not epic_issues:
             empty_epics.append(epic_key)
             continue
@@ -3001,20 +3018,18 @@ def run_gantt(config_path, history_dir=None, since=None):
                 ordered_keys.append(key)
                 story_data[key] = issue
 
-    # Fetch individual stories
-    if config.stories:
-        print(f"Fetching {len(config.stories)} individual stories...", file=sys.stderr)
-        individual = fetch_stories_by_keys(config.stories)
+    # Add individual stories
+    if individual_result:
+        individual = individual_result.result()
         for key in config.stories:
             if key in individual and key not in story_data:
                 ordered_keys.append(key)
                 story_data[key] = individual[key]
 
-    # Fetch stories in open and future sprints
-    if config.include_open_sprints or config.include_future_sprints:
-        print("Fetching sprint stories...", file=sys.stderr)
+    # Add stories in open and future sprints
+    if sprint_result:
         added = 0
-        for issue in fetch_sprint_stories(config.include_open_sprints, config.include_future_sprints):
+        for issue in sprint_result.result():
             key = issue["key"]
             if key not in story_data:
                 ordered_keys.append(key)
