@@ -2135,7 +2135,15 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   #toolbar button:hover {{ background: #e8e8e8; }}
   #toolbar button.active {{ background: #4e79a7; color: #fff; border-color: #4e79a7; }}
   #toolbar button:disabled {{ cursor: wait; color: #888; background: #f4f4f4; }}
-  #refresh-status {{ font-size: 12px; color: #c33; }}
+  /* A failed refresh: one line under the refresh button, cut off with … ; its tooltip has the whole message */
+  #refresh-error {{ display: flex; align-items: center; gap: 6px; margin: -6px 0 10px; font-size: 12px; color: #c33; }}
+  #refresh-error[hidden] {{ display: none; }}
+  #refresh-error-text {{ min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+  #refresh-error-close {{
+    flex: none; padding: 0 4px; border: none; background: none; color: #c33;
+    font-size: 16px; line-height: 1; cursor: pointer;
+  }}
+  #refresh-error-close:hover {{ color: #900; }}
   /* Covers the page while a refresh from Jira runs; the page reloads when it is done */
   #refresh-overlay {{
     position: fixed; inset: 0; z-index: 10000; display: flex; flex-direction: column;
@@ -2270,7 +2278,6 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
 <h2>Gantt Chart — {date.today()}</h2>
 <div id="toolbar">
   <button id="refresh-button" hidden onclick="refreshChart()" title="Fetch the stories from Jira again and redraw the chart">Refresh from Jira</button>
-  <span id="refresh-status"></span>
   <div class="zoom-buttons">
     <button onclick="chooseZoom('day')">Day</button>
     <button onclick="chooseZoom('week')">Week</button>
@@ -2285,6 +2292,11 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     <span id="search-count"></span>
   </div>
 </div>
+<div id="refresh-error" hidden role="alert">
+  <span id="refresh-error-text"></span>
+  <button id="refresh-error-close" title="Close" aria-label="Close"
+    onclick="document.getElementById('refresh-error').hidden = true">&times;</button>
+</div>
 <div id="member-filter"></div>
 <div id="refresh-overlay" hidden role="status" aria-live="polite">
   <div class="spinner"></div>
@@ -2297,11 +2309,12 @@ if (location.protocol.startsWith("http")) {{
 }}
 function refreshChart() {{
   const button = document.getElementById("refresh-button");
-  const status = document.getElementById("refresh-status");
+  const errorLine = document.getElementById("refresh-error");
+  const errorText = document.getElementById("refresh-error-text");
   const overlay = document.getElementById("refresh-overlay");
   button.disabled = true;
   button.textContent = "Refreshing…";
-  status.textContent = "";
+  errorLine.hidden = true;
   overlay.hidden = false;
   fetch("refresh", {{method: "POST", headers: {{"X-Jira-Smurf": "refresh"}}}})
     .then(response => response.text().then(text => {{
@@ -2312,7 +2325,10 @@ function refreshChart() {{
       overlay.hidden = true;
       button.disabled = false;
       button.textContent = "Refresh from Jira";
-      status.textContent = "Refresh failed: " + error.message;
+      const message = "Refresh failed: " + error.message.replace(/\\s+/g, " ").trim();
+      errorText.textContent = message;
+      errorText.title = message;
+      errorLine.hidden = false;
     }});
 }}
 </script>

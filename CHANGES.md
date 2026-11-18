@@ -4,6 +4,8 @@ The tool has no version numbers yet. This file lists the changes per week, newes
 
 ## Week of 2026-11-16
 
+- Show a failed refresh from Jira as one red line under the refresh button, with a × to close it.
+  Hover over the line to see the whole message.
 - Fetch the stories of the epics, the single stories, the sprint stories and the issue type icons
   4 calls at a time, not one after another.
 - Show the last day of a bar next to it in the Gantt chart. It showed the day after, one day later
