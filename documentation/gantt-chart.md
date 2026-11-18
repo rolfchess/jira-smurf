@@ -26,7 +26,8 @@ login; an emoji is used when an icon cannot be downloaded.
 
 The Sprint column shows a story's latest sprint number. The Status column shows its current Jira
 status. Search also matches epic badges. A search also shows the stories it finds that a filter
-hides, such as done stories, until you clear the search box.
+hides, such as done stories, until you clear the search box. The rows it finds have a frame in the
+color of the search box, violet by default.
 
 ## Refreshing in the browser
 

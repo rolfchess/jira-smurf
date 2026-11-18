@@ -208,7 +208,7 @@ class GanttConfig:
     implementation_status: str  # status where open stories show their days of work in a badge, "" if not set
     exclude: list  # [key or project key, ...] — uppercase; stories that match are left out of the chart
     badges: list  # [{field, label, color, stripe}, ...] — badges on epic rows where a Jira field is set
-    visuals: dict  # {past_due_blink, past_due_color, behind_baseline_blink, behind_baseline_color}
+    visuals: dict  # {past_due_blink, past_due_color, behind_baseline_blink, behind_baseline_color, search_color}
 
 
 def is_excluded(key, exclude):
@@ -504,7 +504,7 @@ def parse_badges(badges_raw, path):
 
 
 DEFAULT_VISUALS = {"past_due_blink": True, "past_due_color": "#d62728",
-                   "behind_baseline_blink": False, "behind_baseline_color": "#f2c200"}
+                   "behind_baseline_blink": False, "behind_baseline_color": "#f2c200", "search_color": "#9c27b0"}
 
 
 def parse_visuals(visuals_raw, path):
@@ -525,7 +525,7 @@ def parse_visuals(visuals_raw, path):
         if not isinstance(visuals[name], bool):
             print(f"Error: '{name}' in [visuals] must be true or false, got {visuals[name]!r}", file=sys.stderr)
             sys.exit(1)
-    for name in ("past_due_color", "behind_baseline_color"):
+    for name in ("past_due_color", "behind_baseline_color", "search_color"):
         if not is_css_color(visuals[name]):
             print(f"Error: '{name}' in [visuals] must be a CSS color such as \"{DEFAULT_VISUALS[name]}\", "
                   f"got {visuals[name]!r}", file=sys.stderr)
@@ -2066,6 +2066,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     visuals = visuals or DEFAULT_VISUALS
     past_due = visuals["past_due_color"]
     behind = visuals["behind_baseline_color"]
+    search = visuals["search_color"]
     behind_css = (f"  .gantt_task_line.change-late {{ box-shadow: 0 0 0 2px {behind}, "
                   f"0 0 6px 3px color-mix(in srgb, {behind} 60%, transparent); }}")
     if visuals["behind_baseline_blink"]:
@@ -2197,6 +2198,8 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     font-size: 13px; min-width: 220px;
   }}
   #search-input:focus {{ outline: none; border-color: #4e79a7; }}
+  /* While the search box has text, it and the rows it found have a frame in the search color */
+  #search-input.searching {{ border-color: {search}; box-shadow: 0 0 0 1px {search}; }}
   #search-count {{ font-size: 12px; color: #666; min-width: 70px; }}
   #member-filter {{ margin-bottom: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; }}
   #member-filter .filter-label {{ color: #666; margin-right: 4px; }}
@@ -2208,10 +2211,14 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   .member-badge.active {{ background: #4e79a7; color: #fff; border-color: #4e79a7; }}
   .member-badge .count {{ margin-left: 4px; opacity: 0.7; }}
   #member-clear {{ border: none; background: none; color: #4e79a7; cursor: pointer; font-size: 12px; text-decoration: underline; }}
-  .gantt_task_line.search-match {{ outline: 3px solid #ffd400; outline-offset: 2px; z-index: 50; }}
   .gantt_task_line.search-dim {{ opacity: 0.2; }}
-  .gantt_row.search-match-row {{ background: #fff7c2 !important; font-weight: 600; }}
   .gantt_row.search-dim-row {{ opacity: 0.45; }}
+  /* One frame around a found row: the grid half has no right edge, the timeline half no left edge */
+  #gantt_here .gantt_row.search-match-row::after, #gantt_here .gantt_task_row.search-match-row::after {{
+    content: ""; position: absolute; inset: 0; z-index: 1; pointer-events: none; border: 2px solid {search};
+  }}
+  #gantt_here .gantt_row.search-match-row::after {{ border-right: none; }}
+  #gantt_here .gantt_task_row.search-match-row::after {{ border-left: none; }}
   #show-changes-wrap {{ display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }}
   #gantt_here .gantt_row.change-new-row, #gantt_here .gantt_task_row.change-new-row {{ background: #fff3bf; }}
   /* The row under the mouse darkens in the grid and in the timeline. The row colors above have the
@@ -2662,9 +2669,7 @@ gantt.templates.task_class = function(start, end, task) {{
   var base = (task.progress >= 1 ? "clickable-task task-done" : "clickable-task") +
     (pastDueDate ? " due-late" : changeBarClass(task)) +
     (task.roadmap ? " roadmap-epic" : "") + (task.no_bar ? " no-bar" : "");
-  if (!searchTerm) return base;
-  if (searchMatchIds[task.id]) return base + " search-match";
-  if (searchVisibleIds[task.id]) return base;
+  if (!searchTerm || searchVisibleIds[task.id]) return base;
   return base + " search-dim";
 }};
 var statusClasses = {status_classes_json};  // {{lowercase status: CSS class}} for the row background
@@ -2676,7 +2681,8 @@ function epicRowClass(task) {{
   return task.is_epic ? "epic-row" : "";
 }}
 gantt.templates.task_row_class = function(start, end, task) {{
-  return joinClasses(epicRowClass(task), statusRowClass(task), changeRowClass(task));
+  return joinClasses(epicRowClass(task), statusRowClass(task), changeRowClass(task),
+    searchTerm && searchMatchIds[task.id] ? "search-match-row" : "");
 }};
 gantt.templates.grid_row_class = function(start, end, task) {{
   var base = joinClasses(epicRowClass(task), task.progress >= 1 ? "task-done-row" : "",
@@ -2689,6 +2695,7 @@ gantt.templates.grid_row_class = function(start, end, task) {{
 function onSearchInput() {{
   var raw = document.getElementById("search-input").value.trim().toLowerCase();
   searchTerm = raw;
+  document.getElementById("search-input").classList.toggle("searching", !!raw);
   searchMatchIds = {{}};
   searchVisibleIds = {{}};
   var countEl = document.getElementById("search-count");
