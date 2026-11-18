@@ -4,6 +4,8 @@ The tool has no version numbers yet. This file lists the changes per week, newes
 
 ## Week of 2026-11-16
 
+- Show the stories that a search finds, also when a filter hides them, such as done stories. They
+  hide again when you clear the search box. The count says how many were hidden.
 - Fetch the stories of the epics, the single stories, the sprint stories and the issue type icons
   4 calls at a time, not one after another.
 - Show the last day of a bar next to it in the Gantt chart. It showed the day after, one day later

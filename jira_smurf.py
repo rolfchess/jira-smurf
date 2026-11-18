@@ -2474,6 +2474,12 @@ function isStoryShown(task) {{
 }}
 function isTaskShown(task) {{
   if (task.removed) return showChanges;
+  // A search shows its matches and their epics, also when a filter hides them
+  if (searchVisibleIds[task.id]) return true;
+  return isTaskShownByFilters(task);
+}}
+// Whether the filters show a story or epic that is still in the plan, apart from a search.
+function isTaskShownByFilters(task) {{
   if (!isFiltering()) return true;
   // An epic without stories has no team member
   if (task.roadmap) return Object.keys(selectedMembers).length === 0;
@@ -2589,14 +2595,7 @@ function showShownDates() {{
   // Keep the timeline and the day at its left edge. The timeline only grows, so stories that
   // the filter shows again, such as done stories, are on it.
   var leftDate = gantt.dateFromPos(gantt.getScrollState().x);
-  var project = shownDates();
-  if (project.start_date && project.start_date < gantt.config.start_date) {{
-    gantt.config.start_date = project.start_date;
-  }}
-  if (project.end_date) {{
-    var end = gantt.date.add(project.end_date, 1, "day");
-    if (end > gantt.config.end_date) gantt.config.end_date = end;
-  }}
+  growTimeline();
   gantt.render();
   gantt.scrollTo(gantt.posFromDate(leftDate), null);
 }}
@@ -2700,6 +2699,7 @@ function onSearchInput() {{
   }}
   var firstMatchId = null;
   var matchCount = 0;
+  var hiddenCount = 0;
   var opened = {{}};
   // Each gantt.open() redraws the chart, so open the epics of all matches in one batch
   gantt.batchUpdate(function() {{
@@ -2712,6 +2712,7 @@ function onSearchInput() {{
       searchMatchIds[task.id] = true;
       searchVisibleIds[task.id] = true;
       matchCount++;
+      if (!task.removed && !isTaskShownByFilters(task)) hiddenCount++;
       if (firstMatchId === null) firstMatchId = task.id;
       var p = gantt.getParent(task.id);
       while (p && p !== gantt.config.root_id && !opened[p]) {{
@@ -2722,9 +2723,29 @@ function onSearchInput() {{
       }}
     }});
   }});
-  countEl.textContent = matchCount === 1 ? "1 match" : matchCount + " matches";
+  countEl.textContent = (matchCount === 1 ? "1 match" : matchCount + " matches") +
+    (hiddenCount ? " (" + hiddenCount + " hidden by filters)" : "");
   gantt.refreshData();
+  // A match that a filter hides can be outside the timeline, for example a done story
+  if (hiddenCount && growTimeline()) gantt.render();
   if (firstMatchId !== null) gantt.showTask(firstMatchId);
+}}
+// Make the timeline as wide as the shown stories, without making it smaller. Return true when it grew.
+function growTimeline() {{
+  var project = shownDates();
+  var grown = false;
+  if (project.start_date && project.start_date < gantt.config.start_date) {{
+    gantt.config.start_date = project.start_date;
+    grown = true;
+  }}
+  if (project.end_date) {{
+    var end = gantt.date.add(project.end_date, 1, "day");
+    if (end > gantt.config.end_date) {{
+      gantt.config.end_date = end;
+      grown = true;
+    }}
+  }}
+  return grown;
 }}
 // Search when the typing pauses, not on every key
 var searchTimer = null;
