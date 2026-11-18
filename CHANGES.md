@@ -4,11 +4,32 @@ The tool has no version numbers yet. This file lists the changes per week, newes
 
 ## Week of 2026-11-16
 
+- Show the stories that a search finds, also when a filter hides them, such as done stories. They
+  hide again when you clear the search box. The count says how many were hidden.
+- Mark the rows that a search finds with a frame in the search color, not with a yellow background,
+  and give the search box the same color while it has text. The bars keep their own outlines. Set
+  the color with `search_color` in `[visuals]`; it is violet by default.
+- Show the number of search matches under the search box, so the box does not move.
+- Show a failed refresh from Jira as one red line under the refresh button, with a × to close it.
+  Hover over the line to see the whole message. For an error page in HTML, the line shows the title
+  of the page, and the hover shows its text without the HTML tags.
+- Fetch the stories of the epics, the single stories, the sprint stories and the issue type icons
+  4 calls at a time, not one after another.
+- Show the last day of a bar next to it in the Gantt chart. It showed the day after, one day later
+  than the info popup.
+- Open a story in Jira only with a click on its bar, not on the labels next to the bar.
+- Fetch the status history of all stories with the bulk changelog of Jira, one call per 1000
+  stories. When that fails, fetch the history of each story, 4 at a time.
 - Add `behind_baseline_blink` to `[visuals]`, to make the outline of a story that is behind the
   baseline blink. It does not blink by default.
 - Show the baseline bar of a story in the dark shade of its bar color, not in gray.
 - Darken the whole row under the mouse in the Gantt chart, from the name to the end of the timeline.
   A row with its own color keeps that color.
+- Show the info popup of a story only over its bar and over its title in the Story column. The
+  popup appears just under the row and follows the mouse along the row.
+- Show the points in the output of `velocity` with one decimal, so the table lines up.
+- Add a Stories column to the output of `velocity`, with the number of finished stories that have
+  story points.
 
 ## Week of 2026-11-09
 
