@@ -208,7 +208,7 @@ class GanttConfig:
     implementation_status: str  # status where open stories show their days of work in a badge, "" if not set
     exclude: list  # [key or project key, ...] — uppercase; stories that match are left out of the chart
     badges: list  # [{field, label, color, stripe}, ...] — badges on epic rows where a Jira field is set
-    visuals: dict  # {past_due_blink, past_due_color, behind_baseline_blink, behind_baseline_color}
+    visuals: dict  # {past_due_blink, past_due_color, behind_baseline_blink, behind_baseline_color, search_color}
 
 
 def is_excluded(key, exclude):
@@ -504,7 +504,7 @@ def parse_badges(badges_raw, path):
 
 
 DEFAULT_VISUALS = {"past_due_blink": True, "past_due_color": "#d62728",
-                   "behind_baseline_blink": False, "behind_baseline_color": "#f2c200"}
+                   "behind_baseline_blink": False, "behind_baseline_color": "#f2c200", "search_color": "#9c27b0"}
 
 
 def parse_visuals(visuals_raw, path):
@@ -525,7 +525,7 @@ def parse_visuals(visuals_raw, path):
         if not isinstance(visuals[name], bool):
             print(f"Error: '{name}' in [visuals] must be true or false, got {visuals[name]!r}", file=sys.stderr)
             sys.exit(1)
-    for name in ("past_due_color", "behind_baseline_color"):
+    for name in ("past_due_color", "behind_baseline_color", "search_color"):
         if not is_css_color(visuals[name]):
             print(f"Error: '{name}' in [visuals] must be a CSS color such as \"{DEFAULT_VISUALS[name]}\", "
                   f"got {visuals[name]!r}", file=sys.stderr)
@@ -2066,6 +2066,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     visuals = visuals or DEFAULT_VISUALS
     past_due = visuals["past_due_color"]
     behind = visuals["behind_baseline_color"]
+    search = visuals["search_color"]
     behind_css = (f"  .gantt_task_line.change-late {{ box-shadow: 0 0 0 2px {behind}, "
                   f"0 0 6px 3px color-mix(in srgb, {behind} 60%, transparent); }}")
     if visuals["behind_baseline_blink"]:
@@ -2199,13 +2200,16 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   /* A darker shade of the blue-grey epic row background */
   .gantt_row.epic-row .points-badge {{ border-color: #52677f; background: #52677f; color: #fff; }}
   #show-done-wrap {{ display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }}
-  #search-wrap {{ display: flex; align-items: center; gap: 6px; margin-left: auto; }}
+  #search-wrap {{ position: relative; margin-left: auto; }}
   #search-input {{
     padding: 5px 10px; border: 1px solid #ccc; border-radius: 4px;
     font-size: 13px; min-width: 220px;
   }}
   #search-input:focus {{ outline: none; border-color: #4e79a7; }}
-  #search-count {{ font-size: 12px; color: #666; min-width: 70px; }}
+  /* While the search box has text, it and the rows it found have a frame in the search color */
+  #search-input.searching {{ border-color: {search}; box-shadow: 0 0 0 1px {search}; }}
+  /* Under the search box, so a longer count does not move the box */
+  #search-count {{ position: absolute; top: 100%; right: 0; margin-top: 2px; font-size: 12px; color: #666; white-space: nowrap; }}
   #member-filter {{ margin-bottom: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; }}
   #member-filter .filter-label {{ color: #666; margin-right: 4px; }}
   .member-badge {{
@@ -2216,10 +2220,14 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   .member-badge.active {{ background: #4e79a7; color: #fff; border-color: #4e79a7; }}
   .member-badge .count {{ margin-left: 4px; opacity: 0.7; }}
   #member-clear {{ border: none; background: none; color: #4e79a7; cursor: pointer; font-size: 12px; text-decoration: underline; }}
-  .gantt_task_line.search-match {{ outline: 3px solid #ffd400; outline-offset: 2px; z-index: 50; }}
   .gantt_task_line.search-dim {{ opacity: 0.2; }}
-  .gantt_row.search-match-row {{ background: #fff7c2 !important; font-weight: 600; }}
   .gantt_row.search-dim-row {{ opacity: 0.45; }}
+  /* One frame around a found row: the grid half has no right edge, the timeline half no left edge */
+  #gantt_here .gantt_row.search-match-row::after, #gantt_here .gantt_task_row.search-match-row::after {{
+    content: ""; position: absolute; inset: 0; z-index: 1; pointer-events: none; border: 2px solid {search};
+  }}
+  #gantt_here .gantt_row.search-match-row::after {{ border-right: none; }}
+  #gantt_here .gantt_task_row.search-match-row::after {{ border-left: none; }}
   #show-changes-wrap {{ display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }}
   #gantt_here .gantt_row.change-new-row, #gantt_here .gantt_task_row.change-new-row {{ background: #fff3bf; }}
   /* The row under the mouse darkens in the grid and in the timeline. The row colors above have the
@@ -2490,6 +2498,12 @@ function isStoryShown(task) {{
 }}
 function isTaskShown(task) {{
   if (task.removed) return showChanges;
+  // A search shows its matches and their epics, also when a filter hides them
+  if (searchVisibleIds[task.id]) return true;
+  return isTaskShownByFilters(task);
+}}
+// Whether the filters show a story or epic that is still in the plan, apart from a search.
+function isTaskShownByFilters(task) {{
   if (!isFiltering()) return true;
   // An epic without stories has no team member
   if (task.roadmap) return Object.keys(selectedMembers).length === 0;
@@ -2605,14 +2619,7 @@ function showShownDates() {{
   // Keep the timeline and the day at its left edge. The timeline only grows, so stories that
   // the filter shows again, such as done stories, are on it.
   var leftDate = gantt.dateFromPos(gantt.getScrollState().x);
-  var project = shownDates();
-  if (project.start_date && project.start_date < gantt.config.start_date) {{
-    gantt.config.start_date = project.start_date;
-  }}
-  if (project.end_date) {{
-    var end = gantt.date.add(project.end_date, 1, "day");
-    if (end > gantt.config.end_date) gantt.config.end_date = end;
-  }}
+  growTimeline();
   gantt.render();
   gantt.scrollTo(gantt.posFromDate(leftDate), null);
 }}
@@ -2679,9 +2686,7 @@ gantt.templates.task_class = function(start, end, task) {{
   var base = (task.progress >= 1 ? "clickable-task task-done" : "clickable-task") +
     (pastDueDate ? " due-late" : changeBarClass(task)) +
     (task.roadmap ? " roadmap-epic" : "") + (task.no_bar ? " no-bar" : "");
-  if (!searchTerm) return base;
-  if (searchMatchIds[task.id]) return base + " search-match";
-  if (searchVisibleIds[task.id]) return base;
+  if (!searchTerm || searchVisibleIds[task.id]) return base;
   return base + " search-dim";
 }};
 var statusClasses = {status_classes_json};  // {{lowercase status: CSS class}} for the row background
@@ -2693,7 +2698,8 @@ function epicRowClass(task) {{
   return task.is_epic ? "epic-row" : "";
 }}
 gantt.templates.task_row_class = function(start, end, task) {{
-  return joinClasses(epicRowClass(task), statusRowClass(task), changeRowClass(task));
+  return joinClasses(epicRowClass(task), statusRowClass(task), changeRowClass(task),
+    searchTerm && searchMatchIds[task.id] ? "search-match-row" : "");
 }};
 gantt.templates.grid_row_class = function(start, end, task) {{
   var base = joinClasses(epicRowClass(task), task.progress >= 1 ? "task-done-row" : "",
@@ -2706,6 +2712,7 @@ gantt.templates.grid_row_class = function(start, end, task) {{
 function onSearchInput() {{
   var raw = document.getElementById("search-input").value.trim().toLowerCase();
   searchTerm = raw;
+  document.getElementById("search-input").classList.toggle("searching", !!raw);
   searchMatchIds = {{}};
   searchVisibleIds = {{}};
   var countEl = document.getElementById("search-count");
@@ -2716,6 +2723,7 @@ function onSearchInput() {{
   }}
   var firstMatchId = null;
   var matchCount = 0;
+  var hiddenCount = 0;
   var opened = {{}};
   // Each gantt.open() redraws the chart, so open the epics of all matches in one batch
   gantt.batchUpdate(function() {{
@@ -2728,6 +2736,7 @@ function onSearchInput() {{
       searchMatchIds[task.id] = true;
       searchVisibleIds[task.id] = true;
       matchCount++;
+      if (!task.removed && !isTaskShownByFilters(task)) hiddenCount++;
       if (firstMatchId === null) firstMatchId = task.id;
       var p = gantt.getParent(task.id);
       while (p && p !== gantt.config.root_id && !opened[p]) {{
@@ -2738,9 +2747,29 @@ function onSearchInput() {{
       }}
     }});
   }});
-  countEl.textContent = matchCount === 1 ? "1 match" : matchCount + " matches";
+  countEl.textContent = (matchCount === 1 ? "1 match" : matchCount + " matches") +
+    (hiddenCount ? " (" + hiddenCount + " hidden by filters)" : "");
   gantt.refreshData();
+  // A match that a filter hides can be outside the timeline, for example a done story
+  if (hiddenCount && growTimeline()) gantt.render();
   if (firstMatchId !== null) gantt.showTask(firstMatchId);
+}}
+// Make the timeline as wide as the shown stories, without making it smaller. Return true when it grew.
+function growTimeline() {{
+  var project = shownDates();
+  var grown = false;
+  if (project.start_date && project.start_date < gantt.config.start_date) {{
+    gantt.config.start_date = project.start_date;
+    grown = true;
+  }}
+  if (project.end_date) {{
+    var end = gantt.date.add(project.end_date, 1, "day");
+    if (end > gantt.config.end_date) {{
+      gantt.config.end_date = end;
+      grown = true;
+    }}
+  }}
+  return grown;
 }}
 // Search when the typing pauses, not on every key
 var searchTimer = null;

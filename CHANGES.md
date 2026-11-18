@@ -4,6 +4,12 @@ The tool has no version numbers yet. This file lists the changes per week, newes
 
 ## Week of 2026-11-16
 
+- Show the stories that a search finds, also when a filter hides them, such as done stories. They
+  hide again when you clear the search box. The count says how many were hidden.
+- Mark the rows that a search finds with a frame in the search color, not with a yellow background,
+  and give the search box the same color while it has text. The bars keep their own outlines. Set
+  the color with `search_color` in `[visuals]`; it is violet by default.
+- Show the number of search matches under the search box, so the box does not move.
 - Show a failed refresh from Jira as one red line under the refresh button, with a × to close it.
   Hover over the line to see the whole message.
 - Fetch the stories of the epics, the single stories, the sprint stories and the issue type icons
