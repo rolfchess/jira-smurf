@@ -6,6 +6,9 @@ The tool has no version numbers yet. This file lists the changes per week, newes
 
 - Keep the vertical line under the mouse in the Gantt chart after you scroll the timeline. In the Day
   and Week views, it moved away from the mouse by the distance you had scrolled.
+- Leave 300 pixels of room after the last bar of the timeline, in every scale. The text next to the
+  last bars, such as the assignee and the end date, was cut off at the right edge in Fit All, and you
+  could not scroll to it.
 
 ## Week of 2026-11-16
 
