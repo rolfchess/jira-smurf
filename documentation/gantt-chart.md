@@ -2,11 +2,14 @@
 
 The chart supports zooming, searching, and filtering by team member. Select several members—or
 “Unassigned”—to combine their work. Done stories are hidden initially; use the toolbar to show them.
-The Story-column buttons collapse or expand every epic.
+The Story-column buttons collapse or expand every epic. Click an epic in the Story column to
+collapse or expand only that epic.
 
 The Day, Week, Month and Quarter buttons set the scale of the chart. A filter then keeps that scale
 and the dates in view. Scroll to see stories outside them. Until you pick a scale, a filter fits the
-chart to the stories that are shown. After Fit All, it does the same.
+chart to the stories that are shown. After Fit All, it does the same. In every scale, the timeline
+has 300 pixels of room after the last bar, so you can read the text next to it, and Fit All keeps
+that room in view.
 
 The row under the mouse is darker across the whole chart. Point at a bar, or at a title in the Story
 column, to see the dates and changes of that story under its row. Click a bar to open its Jira issue. Issue icons are embedded in the page so they work without a Jira
