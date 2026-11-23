@@ -2,6 +2,11 @@
 
 The tool has no version numbers yet. This file lists the changes per week, newest first.
 
+## Week of 2026-11-23
+
+- Keep the vertical line under the mouse in the Gantt chart after you scroll the timeline. In the Day
+  and Week views, it moved away from the mouse by the distance you had scrolled.
+
 ## Week of 2026-11-16
 
 - Show the stories that a search finds, also when a filter hides them, such as done stories. They

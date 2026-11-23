@@ -2915,7 +2915,8 @@ gantt.addMarker({{ start_date: new Date(), css: "today-marker", text: "Today" }}
   taskArea.appendChild(ruler);
   taskArea.addEventListener("mousemove", function(e) {{
     var rect = taskArea.getBoundingClientRect();
-    ruler.style.left = (e.clientX - rect.left) + "px";
+    // The ruler scrolls with the timeline, so its position counts from the start of the timeline, not the visible edge
+    ruler.style.left = (e.clientX - rect.left + taskArea.scrollLeft) + "px";
     ruler.style.display = "block";
   }});
   taskArea.addEventListener("mouseleave", function() {{
