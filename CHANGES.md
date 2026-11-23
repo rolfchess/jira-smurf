@@ -2,6 +2,16 @@
 
 The tool has no version numbers yet. This file lists the changes per week, newest first.
 
+## Week of 2026-11-23
+
+- Keep the vertical line under the mouse in the Gantt chart after you scroll the timeline. In the Day
+  and Week views, it moved away from the mouse by the distance you had scrolled.
+- Leave 300 pixels of room after the last bar of the timeline, in every scale. The text next to the
+  last bars, such as the assignee and the end date, was cut off at the right edge in Fit All, and you
+  could not scroll to it.
+- Collapse or expand an epic when you click it in the Story column. Before, the click selected the
+  epic and scrolled the timeline to its bar.
+
 ## Week of 2026-11-16
 
 - Show the stories that a search finds, also when a filter hides them, such as done stories. They

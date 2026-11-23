@@ -2491,9 +2491,41 @@ function setAllOpen(open) {{
 }}
 function setZoom(level) {{
   gantt.ext.zoom.setLevel(level);
+  makeLabelRoom(false);
   document.querySelectorAll("#toolbar button").forEach(function(b) {{
     b.classList.toggle("active", b.textContent.toLowerCase() === level);
   }});
+}}
+var LABEL_ROOM = 300;  // pixels after the last bar, for the text next to it such as the assignee and the end date
+// Sets the end of the timeline LABEL_ROOM pixels after the last shown bar, at the current scale. With onlyGrow,
+// the end does not move earlier. Returns true when the end moved.
+function makeLabelRoom(onlyGrow) {{
+  var project = shownDates();
+  if (!project.end_date) return false;
+  var start = gantt.config.start_date;
+  var barsMs = gantt.date.add(project.end_date, 1, "day") - start;
+  var scale = gantt.getScale();
+  var columnMs = gantt.date.add(start, scale.step || 1, scale.unit) - start;
+  var pixelsPerMs = gantt.config.min_column_width / columnMs;
+  var area = gantt.$task.offsetWidth;
+  var totalMs = barsMs + LABEL_ROOM / pixelsPerMs;
+  // A timeline narrower than the chart gets wider columns, so keep LABEL_ROOM pixels of the chart width free
+  if (totalMs * pixelsPerMs < area && area > LABEL_ROOM) totalMs = barsMs * area / (area - LABEL_ROOM);
+  var end = new Date(start.getTime() + totalMs);
+  if (onlyGrow && end <= gantt.config.end_date) return false;
+  if (Math.abs(end - gantt.config.end_date) < 3600 * 1000) return false;
+  gantt.config.end_date = end;
+  gantt.render();
+  // dhtmlx rounds the timeline out to whole columns, which can make stretched columns narrower than computed
+  var barsEnd = new Date(start.getTime() + barsMs);
+  for (var i = 0; i < 2; i++) {{
+    var missing = LABEL_ROOM - (gantt.getScale().full_width - gantt.posFromDate(barsEnd));
+    if (missing < 1) break;
+    var msPerPixel = (gantt.config.end_date - start) / gantt.posFromDate(gantt.config.end_date);
+    gantt.config.end_date = new Date(gantt.config.end_date.getTime() + missing * msPerPixel);
+    gantt.render();
+  }}
+  return true;
 }}
 var chosenZoom = null;  // the level picked with a zoom button, or null to fit the chart to the shown stories
 function chooseZoom(level) {{
@@ -2539,6 +2571,16 @@ function shownStoryDates(epicId) {{
 }}
 gantt.attachEvent("onBeforeTaskDisplay", function(id, task) {{
   return isTaskShown(task);
+}});
+// A click on an epic in the Story column opens or closes it, instead of selecting it and scrolling to its bar.
+// The arrow in front of the epic does this already, so a click on the arrow is left to dhtmlx.
+gantt.attachEvent("onTaskClick", function(id, e) {{
+  var target = e && e.target;
+  if (!target || !target.closest(".gantt_grid_data") || target.closest(".gantt_tree_icon")) return true;
+  if (!gantt.hasChild(id)) return true;
+  if (gantt.getTask(id).$open) gantt.close(id);
+  else gantt.open(id);
+  return false;
 }});
 // Remaining hours and points of the stories of an epic that pass the filters.
 // The hours get a "?" when one of those stories has no estimate.
@@ -2656,6 +2698,8 @@ function zoomToFit() {{
   gantt.config.start_date = project.start_date;
   gantt.config.end_date = gantt.date.add(project.end_date, 1, "day");
   var areaWidth = gantt.$task.offsetWidth;
+  // The bars must fit in the space left after the text next to them
+  var barsWidth = areaWidth - LABEL_ROOM;
   var levels = ["day", "week", "month", "quarter"];
   // Pick the most detailed level that fits, trying "day" first
   var best = "quarter";
@@ -2663,17 +2707,19 @@ function zoomToFit() {{
     gantt.ext.zoom.setLevel(levels[i]);
     var cols = gantt.getScale().count;
     var minWidth = gantt.config.min_column_width || 50;
-    if (cols * minWidth <= areaWidth) {{
+    if (cols * minWidth <= barsWidth) {{
       best = levels[i];
       break;
     }}
   }}
   setZoom(best);
   // A long range does not fit even at the widest level, so make its columns narrower
-  var count = gantt.getScale().count;
-  if (count * gantt.config.min_column_width > areaWidth) {{
+  for (var round = 0; round < 3; round++) {{
+    var count = gantt.getScale().count;
+    if (count * gantt.config.min_column_width <= areaWidth) break;
     gantt.config.min_column_width = Math.max(20, Math.floor(areaWidth / count));
     gantt.render();
+    makeLabelRoom(false);
   }}
 }}
 var searchTerm = "";
@@ -2786,6 +2832,8 @@ function growTimeline() {{
       grown = true;
     }}
   }}
+  if (grown) gantt.render();
+  if (makeLabelRoom(true)) grown = true;
   return grown;
 }}
 // Search when the typing pauses, not on every key
@@ -2915,7 +2963,8 @@ gantt.addMarker({{ start_date: new Date(), css: "today-marker", text: "Today" }}
   taskArea.appendChild(ruler);
   taskArea.addEventListener("mousemove", function(e) {{
     var rect = taskArea.getBoundingClientRect();
-    ruler.style.left = (e.clientX - rect.left) + "px";
+    // The ruler scrolls with the timeline, so its position counts from the start of the timeline, not the visible edge
+    ruler.style.left = (e.clientX - rect.left + taskArea.scrollLeft) + "px";
     ruler.style.display = "block";
   }});
   taskArea.addEventListener("mouseleave", function() {{
