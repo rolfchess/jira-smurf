@@ -9,6 +9,8 @@ The tool has no version numbers yet. This file lists the changes per week, newes
 - Leave 300 pixels of room after the last bar of the timeline, in every scale. The text next to the
   last bars, such as the assignee and the end date, was cut off at the right edge in Fit All, and you
   could not scroll to it.
+- Collapse or expand an epic when you click it in the Story column. Before, the click selected the
+  epic and scrolled the timeline to its bar.
 
 ## Week of 2026-11-16
 

@@ -2,7 +2,8 @@
 
 The chart supports zooming, searching, and filtering by team member. Select several members—or
 “Unassigned”—to combine their work. Done stories are hidden initially; use the toolbar to show them.
-The Story-column buttons collapse or expand every epic.
+The Story-column buttons collapse or expand every epic. Click an epic in the Story column to
+collapse or expand only that epic.
 
 The Day, Week, Month and Quarter buttons set the scale of the chart. A filter then keeps that scale
 and the dates in view. Scroll to see stories outside them. Until you pick a scale, a filter fits the

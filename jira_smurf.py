@@ -2572,6 +2572,16 @@ function shownStoryDates(epicId) {{
 gantt.attachEvent("onBeforeTaskDisplay", function(id, task) {{
   return isTaskShown(task);
 }});
+// A click on an epic in the Story column opens or closes it, instead of selecting it and scrolling to its bar.
+// The arrow in front of the epic does this already, so a click on the arrow is left to dhtmlx.
+gantt.attachEvent("onTaskClick", function(id, e) {{
+  var target = e && e.target;
+  if (!target || !target.closest(".gantt_grid_data") || target.closest(".gantt_tree_icon")) return true;
+  if (!gantt.hasChild(id)) return true;
+  if (gantt.getTask(id).$open) gantt.close(id);
+  else gantt.open(id);
+  return false;
+}});
 // Remaining hours and points of the stories of an epic that pass the filters.
 // The hours get a "?" when one of those stories has no estimate.
 function shownStoryTotals(epicId) {{
