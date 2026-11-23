@@ -958,12 +958,15 @@ def epic_badges(fields, badges, field_names):
 
 
 def fetch_epics(epic_keys, start_date_field=None, badges=(), field_names=None):
-    """Return {epic key: {key, name, start, due, badges}} for the given epics.
+    """Return {epic key: {key, name, space, start, due, badges}} for the given epics.
+
+    space is the name of the Jira space (project) of the epic, and space_avatar the address of its
+    avatar image, or "".
 
     start and due are YYYY-MM-DD strings, or "" when the epic has no such date in Jira.
     badges is the list from epic_badges for the [[badges]] of the configuration.
     """
-    fields = ",".join(["summary", "duedate"] + ([start_date_field] if start_date_field else [])
+    fields = ",".join(["summary", "duedate", "project"] + ([start_date_field] if start_date_field else [])
                       + [badge["field"] for badge in badges])
     jql = f"key in ({', '.join(epic_keys)})"
     epics = {}
@@ -978,6 +981,8 @@ def fetch_epics(epic_keys, start_date_field=None, badges=(), field_names=None):
             epics[issue["key"]] = {
                 "key": issue["key"],
                 "name": f.get("summary") or issue["key"],
+                "space": (f.get("project") or {}).get("name", ""),
+                "space_avatar": ((f.get("project") or {}).get("avatarUrls") or {}).get("24x24", ""),
                 "start": (f.get(start_date_field) or "")[:10] if start_date_field else "",
                 "due": (f.get("duedate") or "")[:10],
                 "badges": epic_badges(f, badges, field_names or {}),
@@ -1769,6 +1774,9 @@ def issue_type_icon(issue_type):
     return ISSUE_TYPE_ICONS.get(issue_type.lower(), OTHER_ISSUE_TYPE_ICON)
 
 
+# The thin line of a space row in the timeline
+SPACE_COLOR = "#8a9bb0"
+
 EPIC_COLORS = [
     "#4e79a7", "#f28e2b", "#e15759", "#76b7b2", "#59a14f",
     "#edc948", "#b07aa1", "#ff9da7", "#9c755f", "#bab0ac",
@@ -1777,7 +1785,7 @@ EPIC_COLORS = [
 
 def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=(), status_colors=None,
                      changes=None, snapshots=(), icon_images=None, epic_icon_url="",
-                     epics_info=None, roadmap_epics=(), epic_order=(), visuals=None):
+                     epics_info=None, roadmap_epics=(), epic_order=(), visuals=None, group_by_space=False):
     """Write a self-contained HTML file with a DHTMLX Gantt chart.
 
     With changes (from compare_plans), the chart can mark what changed since the baseline.
@@ -1788,6 +1796,8 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     epics without stories; each is shown as a striped bar from its start to its due date.
     epic_order is the list of epic keys in the order of the epic rows. Epics that are not in it
     come after them.
+    With group_by_space, the epics are put under a header row per Jira space, when they are in more
+    than one space. epic_order must then list the epics of a space together.
     visuals is the [visuals] of the configuration, from parse_visuals.
     """
     # Assign colors to epics
@@ -1855,9 +1865,38 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
         search_text = " ".join(b["search"] for b in badges)
         return {"badges_html": pills, "badges_text": search_text, "stripe_class": stripe_classes.get(stripes, "")}
 
+    # A header row per Jira space above its epics, when the epics are in more than one space
+    def row_space(kind, row):
+        key = row["key"] if kind == "roadmap" else epic_name_to_key.get(row, "")
+        return epics_info.get(key, {})
+
+    spaces = {row_space(kind, row).get("space", "") for kind, row in epic_rows if row != NO_EPIC} - {""}
+    use_spaces = group_by_space and len(spaces) > 1
+    space_task_ids = {}  # {space name: task id}
+    epic_parents = {}    # {epic task id: space task id}
+
     # Create a parent task per epic
     for kind, row in epic_rows:
+        space_info = row_space(kind, row) if use_spaces and row != NO_EPIC else {}
+        space = space_info.get("space", "")
+        if space and space not in space_task_ids:
+            task_id += 1
+            space_task_ids[space] = task_id
+            tasks.append({
+                "id": task_id,
+                "text": space,
+                "effort": "",
+                "status": "",
+                "color": SPACE_COLOR,
+                "type": "project",
+                "is_space": True,
+                "open": True,
+                "icon_url": space_info.get("space_avatar", ""),
+                "progress": 0,
+            })
         task_id += 1
+        if space:
+            epic_parents[task_id] = space_task_ids[space]
         if kind == "roadmap":
             # An epic without stories is shown as a striped bar from its start date to its due date in Jira
             first, last = row["start"] or row["due"], row["due"] or row["start"]
@@ -1876,6 +1915,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
                 "roadmap": True,
                 "is_epic": True,
                 "due_date": row["due"],
+                **({"parent": epic_parents[task_id]} if task_id in epic_parents else {}),
                 **badge_fields(row["key"]),
             })
             continue
@@ -1926,9 +1966,25 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             "story_key": epic_name_to_key.get(epic_name, ""),
             "due_date": epics_info.get(epic_name_to_key.get(epic_name, ""), {}).get("due", ""),
             "progress": epic_progress,
+            **({"parent": epic_parents[task_id]} if task_id in epic_parents else {}),
+            "hours": epic_effort,
+            "points_value": epic_points,
             **badge_fields(epic_name_to_key.get(epic_name, "")),
             **(changes["epics"].get(epic_name, {}) if changes else {}),
         })
+
+    # A space row spans the bars of its epics and adds up their hours and points
+    for space_id in space_task_ids.values():
+        space_task = next(t for t in tasks if t["id"] == space_id)
+        epics = [t for t in tasks if t.get("parent") == space_id]
+        space_task["start_date"] = min(t["start_date"] for t in epics)
+        space_task["end_date"] = max(t["end_date"] for t in epics)
+        hours = sum(t.get("hours", 0) for t in epics)
+        points = sum(t.get("points_value", 0) for t in epics)
+        unestimated = any(t.get("unestimated") for t in epics)
+        space_task["effort"] = (f"{hours:.0f}h" if hours == int(hours) else f"{hours:.1f}h") + ("?" if unestimated else "")
+        space_task["points"] = format_points(points) if points else ""
+        space_task["unestimated"] = unestimated
 
     # Create story tasks as children of their epic
     story_key_to_task_id = {}
@@ -2199,6 +2255,20 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   .gantt_row.epic-row {{ font-weight: 600; }}
   /* A darker shade of the blue-grey epic row background */
   .gantt_row.epic-row .points-badge {{ border-color: #52677f; background: #52677f; color: #fff; }}
+  /* A space row is a section heading above its epics, one shade darker than an epic row */
+  #gantt_here .gantt_row.space-row, #gantt_here .gantt_task_row.space-row {{ background: #dde4ec; }}
+  .gantt_row.space-row {{ font-weight: 700; color: #34495e; }}
+  .gantt_row.space-row .gantt_cell:first-child span {{ font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px; }}
+  .gantt_row.space-row .points-badge {{ border-color: #34495e; background: #34495e; color: #fff; }}
+  img.type-icon.space-avatar {{ border-radius: 3px; }}
+  /* In the timeline a space is a thin line under the bars of its epics, not a bar of its own */
+  .gantt_task_line.space-bar {{ background: transparent; border: none; box-shadow: none; }}
+  .gantt_task_line.space-bar .gantt_task_progress_wrapper,
+  .gantt_task_line.space-bar .gantt_task_content {{ display: none; }}
+  .gantt_task_line.space-bar::before {{
+    content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 4px; margin-top: -2px;
+    border-radius: 2px; background: {SPACE_COLOR};
+  }}
   #show-done-wrap {{ display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }}
   #search-wrap {{ position: relative; margin-left: auto; }}
   #search-input {{
@@ -2391,7 +2461,7 @@ gantt.config.columns = [
       "<button onclick='setAllOpen(true); event.stopPropagation();'>Expand all</button></span>",
     template: function(task) {{
       var image = typeIconImages[task.icon_url];
-      var icon = image ? "<img class='type-icon' src='" + image + "' alt=''>" :
+      var icon = image ? "<img class='type-icon" + (task.is_space ? " space-avatar" : "") + "' src='" + image + "' alt=''>" :
         task.icon ? "<span class='type-icon'>" + task.icon + "</span>" : "";
       // The badges come before the name, so a long name does not hide them
       return icon + (task.badges_html || "") +
@@ -2480,11 +2550,12 @@ gantt.ext.zoom.init({{
 }});
 gantt.ext.zoom.setLevel("week"); // initial level before fit
 // Open or close every epic, so the chart shows all stories or only the epics.
+// The spaces stay open, so their epics stay in sight.
 function setAllOpen(open) {{
   gantt.batchUpdate(function() {{
     gantt.eachTask(function(task) {{
       if (!gantt.hasChild(task.id)) return;
-      if (open) gantt.open(task.id);
+      if (open || task.is_space) gantt.open(task.id);
       else gantt.close(task.id);
     }});
   }});
@@ -2556,6 +2627,10 @@ function isTaskShownByFilters(task) {{
   if (!isFiltering()) return true;
   // An epic without stories has no team member
   if (task.roadmap) return Object.keys(selectedMembers).length === 0;
+  // A space is shown while one of its epics is
+  if (task.is_space) return gantt.getChildren(task.id).some(function(id) {{
+    return isTaskShownByFilters(gantt.getTask(id));
+  }});
   if (gantt.hasChild(task.id)) return !!shownStoryDates(task.id);
   return isStoryShown(task);
 }}
@@ -2563,10 +2638,21 @@ function isTaskShownByFilters(task) {{
 function shownStoryDates(epicId) {{
   var start = null, end = null;
   gantt.eachTask(function(child) {{
-    if (!isStoryShown(child)) return;
+    if (child.is_epic || !isStoryShown(child)) return;
     if (!start || child.start_date < start) start = child.start_date;
     if (!end || child.end_date > end) end = child.end_date;
   }}, epicId);
+  return start ? {{ start_date: start, end_date: end }} : null;
+}}
+// Earliest start and latest end of the epics of a space that pass the filters, or null.
+function shownEpicDates(spaceId) {{
+  var start = null, end = null;
+  gantt.getChildren(spaceId).forEach(function(id) {{
+    var epic = gantt.getTask(id);
+    if (!isTaskShownByFilters(epic)) return;
+    if (!start || epic.start_date < start) start = epic.start_date;
+    if (!end || epic.end_date > end) end = epic.end_date;
+  }});
   return start ? {{ start_date: start, end_date: end }} : null;
 }}
 gantt.attachEvent("onBeforeTaskDisplay", function(id, task) {{
@@ -2582,12 +2668,12 @@ gantt.attachEvent("onTaskClick", function(id, e) {{
   else gantt.open(id);
   return false;
 }});
-// Remaining hours and points of the stories of an epic that pass the filters.
+// Remaining hours and points of the stories of an epic or space that pass the filters.
 // The hours get a "?" when one of those stories has no estimate.
 function shownStoryTotals(epicId) {{
   var hours = 0, points = 0, guess = false;
   gantt.eachTask(function(child) {{
-    if (!isStoryShown(child)) return;
+    if (child.is_epic || !isStoryShown(child)) return;
     hours += child.hours || 0;
     points += child.points_value || 0;
     if (child.unestimated) guess = true;
@@ -2651,8 +2737,9 @@ function buildMemberFilter() {{
 function applyFilters() {{
   hideDone = !document.getElementById("show-done").checked;
   document.getElementById("member-clear").style.display = Object.keys(selectedMembers).length ? "" : "none";
+  // The epics first, as a space takes its dates from them
   gantt.eachTask(function(task) {{
-    if (task.parent !== gantt.config.root_id || task.removed || task.roadmap) return;
+    if (!task.is_epic || task.removed || task.roadmap) return;
     if (!epicDates[task.id]) epicDates[task.id] = {{ start_date: task.start_date, end_date: task.end_date }};
     var dates = isFiltering() ? shownStoryDates(task.id) : null;
     // A "project" task takes its dates from all its children, so use a plain task while stories are hidden.
@@ -2660,6 +2747,18 @@ function applyFilters() {{
     task.start_date = (dates || epicDates[task.id]).start_date;
     task.end_date = (dates || epicDates[task.id]).end_date;
     // The totals of the epic row count only the stories that are shown
+    if (!epicTotals[task.id]) epicTotals[task.id] = {{ effort: task.effort, points: task.points }};
+    var totals = isFiltering() ? shownStoryTotals(task.id) : epicTotals[task.id];
+    task.effort = totals.effort;
+    task.points = totals.points;
+  }});
+  gantt.eachTask(function(task) {{
+    if (!task.is_space) return;
+    if (!epicDates[task.id]) epicDates[task.id] = {{ start_date: task.start_date, end_date: task.end_date }};
+    var dates = isFiltering() ? shownEpicDates(task.id) : null;
+    task.type = dates ? "task" : "project";
+    task.start_date = (dates || epicDates[task.id]).start_date;
+    task.end_date = (dates || epicDates[task.id]).end_date;
     if (!epicTotals[task.id]) epicTotals[task.id] = {{ effort: task.effort, points: task.points }};
     var totals = isFiltering() ? shownStoryTotals(task.id) : epicTotals[task.id];
     task.effort = totals.effort;
@@ -2748,7 +2847,7 @@ gantt.templates.task_class = function(start, end, task) {{
   var pastDueDate = !task.removed && task.progress < 1 && endsAfterDueDate(task);
   var base = (task.progress >= 1 ? "clickable-task task-done" : "clickable-task") +
     (pastDueDate ? " due-late" : changeBarClass(task)) +
-    (task.roadmap ? " roadmap-epic" : "") + (task.no_bar ? " no-bar" : "");
+    (task.roadmap ? " roadmap-epic" : "") + (task.no_bar ? " no-bar" : "") + (task.is_space ? " space-bar" : "");
   if (!searchTerm || searchVisibleIds[task.id]) return base;
   return base + " search-dim";
 }};
@@ -2758,7 +2857,7 @@ function statusRowClass(task) {{
 }}
 function epicRowClass(task) {{
   // Not task.type: the filters turn an epic into a plain task while some of its stories are hidden
-  return task.is_epic ? "epic-row" : "";
+  return task.is_epic ? "epic-row" : task.is_space ? "space-row" : "";
 }}
 gantt.templates.task_row_class = function(start, end, task) {{
   return joinClasses(epicRowClass(task), statusRowClass(task), changeRowClass(task),
@@ -3304,12 +3403,17 @@ def run_gantt(config_path, history_dir=None, since=None):
         print(f"  Epic {key} has no stories yet, showing its dates from Jira", file=sys.stderr)
         roadmap_epics.append(info)
 
-    # The epic rows follow the configuration file, or the Jira rank of the epics with use_backlog_order
+    # The epic rows follow the configuration file, or with use_backlog_order the name of the Jira space
+    # of the epics and then their Jira rank
     epic_order = list(config.epics)
     if config.use_backlog_order and epic_keys:
         print("Fetching the rank of the epics...", file=sys.stderr)
         epic_positions = fetch_backlog_order(epic_keys)
-        epic_order = sorted(epic_keys, key=lambda key: epic_positions.get(key, len(epic_positions)))
+
+        def epic_sort_key(key):
+            space = epics_info.get(key, {}).get("space", "")
+            return (space == "", space.lower(), epic_positions.get(key, len(epic_positions)))
+        epic_order = sorted(epic_keys, key=epic_sort_key)
 
     # Put the Jira issue type icons into the page, so it shows them without a Jira login
     epic_icon_url = find_epic_icon_url(story_data.values())
@@ -3318,6 +3422,9 @@ def run_gantt(config_path, history_dir=None, since=None):
         icon_urls += [r["issue_type_icon_url"] for r in changes["removed"] if r.get("issue_type_icon_url")]
     if epic_icon_url:
         icon_urls.append(epic_icon_url)
+    # The avatars of the spaces, for their header rows
+    if config.use_backlog_order:
+        icon_urls += [info["space_avatar"] for info in epics_info.values() if info.get("space_avatar")]
     icon_images = {}
     if icon_urls:
         print(f"Downloading {len(set(icon_urls))} issue type icons...", file=sys.stderr)
@@ -3325,7 +3432,7 @@ def run_gantt(config_path, history_dir=None, since=None):
 
     write_gantt_html(scheduled, config.statuses, config.dependencies, config.holidays, config.status_colors,
                      changes, snapshots, icon_images, epic_icon_url, epics_info, roadmap_epics, epic_order,
-                     config.visuals)
+                     config.visuals, group_by_space=config.use_backlog_order)
 
 
 def run_velocity(config_path, weeks):

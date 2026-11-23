@@ -16,7 +16,8 @@ Work is grouped before it is ordered:
 4. all remaining stories.
 
 Within those groups, the default order is configured epics, individual stories, then sprint stories.
-With `use_backlog_order = true`, Jira rank determines story and epic order.
+With `use_backlog_order = true`, Jira rank determines story order. Epics are listed by the name of their
+Jira space first, and by Jira rank within each space.
 
 A dependency must finish before the dependent story starts. Dependencies can come from `depends_on`
 or from Jira link types listed in `dependency_links`. Links to work outside the plan are ignored.
