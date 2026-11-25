@@ -4,6 +4,9 @@ The tool has no version numbers yet. This file lists the changes per week, newes
 
 ## Week of 2026-11-23
 
+- Plan an open story that has not started yet no earlier than its Start date in Jira, or, without
+  one, the Start date of its epic. Before, the Start date was only used for epics without stories.
+  The tooltip of a story or epic shows its Start date from Jira.
 - List the stories of an epic in Jira rank order with `use_backlog_order`, with the done stories
   first. Before, they were sorted by start date, so a story that starts earlier, for example
   because auto-assign gave it to someone who is free sooner, came above stories ranked higher.
