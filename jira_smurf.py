@@ -533,13 +533,20 @@ def parse_visuals(visuals_raw, path):
     return visuals
 
 
-def fetch_stories_for_epic(epic_key):
+def story_fields(start_date_field=None):
+    """Return the Jira fields to fetch for a story to plan, with the Start date field when there is one."""
+    fields = (f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,"
+              f"customfield_10016,duedate,created,issuetype,issuelinks")
+    return f"{fields},{start_date_field}" if start_date_field else fields
+
+
+def fetch_stories_for_epic(epic_key, start_date_field=None):
     """Fetch all stories belonging to an epic.
 
     Tries next-gen (parent) first, falls back to classic (Epic Link).
     Returns list of issue dicts.
     """
-    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10016,duedate,created,issuetype,issuelinks"
+    fields = story_fields(start_date_field)
 
     for jql in (
         f"parent = {epic_key} AND issuetype = Story ORDER BY key ASC",
@@ -571,14 +578,14 @@ def fetch_stories_for_epic(epic_key):
     return []
 
 
-def fetch_stories_by_keys(story_keys, warn_missing=True):
+def fetch_stories_by_keys(story_keys, warn_missing=True, start_date_field=None):
     """Fetch specific stories by their Jira keys.
 
     With warn_missing, print a warning for each key that Jira does not return.
     """
     keys_str = ", ".join(story_keys)
     jql = f"key in ({keys_str})"
-    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10016,duedate,created,issuetype,issuelinks"
+    fields = story_fields(start_date_field)
     issues = []
     next_page_token = None
 
@@ -644,7 +651,7 @@ def fetch_finished_stories(start, end):
     return issues
 
 
-def fetch_sprint_stories(include_open, include_future):
+def fetch_sprint_stories(include_open, include_future, start_date_field=None):
     """Fetch the project's stories in open sprints, future sprints or both."""
     sprint_functions = []
     if include_open:
@@ -653,7 +660,7 @@ def fetch_sprint_stories(include_open, include_future):
         sprint_functions.append("futureSprints()")
     sprint_clause = " OR ".join(f"sprint in {f}" for f in sprint_functions)
     jql = f"project = {JIRA_PROJECT} AND issuetype = Story AND ({sprint_clause}) ORDER BY key ASC"
-    fields = f"summary,status,assignee,parent,{STORY_POINTS_FIELD},{SPRINT_FIELD},customfield_10014,customfield_10016,duedate,created,issuetype,issuelinks"
+    fields = story_fields(start_date_field)
     issues = []
     next_page_token = None
 
@@ -843,7 +850,7 @@ def fetch_jira_fields():
     try:
         return jira_get("field")
     except requests.RequestException as e:
-        print(f"Warning: could not read the list of Jira fields ({e}), so epics get no start date, "
+        print(f"Warning: could not read the list of Jira fields ({e}), so stories and epics get no start date, "
               f"badge fields are not checked and badge tooltips show field IDs", file=sys.stderr)
         return []
 
@@ -1294,6 +1301,14 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
                     print(f"Warning: dependency {dep_key} for {story_key} not in scheduled set, ignoring", file=sys.stderr)
             if progress < 1.0:
                 earliest = max(earliest, date.today())
+                # Work that has not started yet waits for the Start date of the story in Jira,
+                # or else that of its epic
+                if issue.get("_start_date") and _group(story_key) > 1:
+                    try:
+                        earliest = max(earliest, date.fromisoformat(issue["_start_date"]))
+                    except ValueError:
+                        print(f"Warning: start date '{issue['_start_date']}' of {story_key} is not a date, "
+                              f"ignoring it", file=sys.stderr)
 
             if progress >= 1.0:
                 # A done story keeps its assignee from Jira and takes no time from anyone.
@@ -1348,6 +1363,7 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
             "status": status,
             "sprint": sprint,
             "due": issue["fields"].get("duedate") or "",
+            "start_date": issue.get("_start_date", ""),  # the Start date from Jira, of the story or its epic
             "created": (issue["fields"].get("created") or "")[:10],
             "implementation_date": issue.get("_implementation_date", ""),
             "implementation_stretches": issue.get("_implementation_stretches", []),
@@ -1972,6 +1988,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             "icon_url": epic_icon_url,
             "story_key": epic_name_to_key.get(epic_name, ""),
             "due_date": epics_info.get(epic_name_to_key.get(epic_name, ""), {}).get("due", ""),
+            "jira_start_date": epics_info.get(epic_name_to_key.get(epic_name, ""), {}).get("start", ""),
             "progress": epic_progress,
             **({"parent": epic_parents[task_id]} if task_id in epic_parents else {}),
             "hours": epic_effort,
@@ -2032,6 +2049,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             "parent": epic_task_ids[s["epic"]],
             "story_key": s["key"],
             "due_date": s.get("due", ""),
+            "jira_start_date": s.get("start_date", ""),
             "created": s.get("created", ""),
             # Days since the story was created, only for open stories: a done story stops ageing
             "age_days": story_age_days(s.get("created", "")) if progress < 1.0 else None,
@@ -2496,6 +2514,9 @@ gantt.templates.tooltip_text = function(start, end, task) {{
     text += task.type === "project" || gantt.hasChild(task.id)
       ? "<br/>Some stories have no estimate in Jira, so the default hours are used for them"
       : "<br/>No estimate in Jira, so the default hours are used";
+  }}
+  if (task.jira_start_date) {{
+    text += "<br/>Start date in Jira: " + fmt(gantt.date.str_to_date("%Y-%m-%d")(task.jira_start_date));
   }}
   if (task.due_date) {{
     var due = gantt.date.str_to_date("%Y-%m-%d")(task.due_date);
@@ -3203,6 +3224,11 @@ def run_gantt(config_path, history_dir=None, since=None):
     """
     config = load_gantt_config(config_path)
 
+    # The Jira field list gives the id of the Start date field: an open story or epic with a Start date
+    # is not planned before it. It also gives the names of the badge fields.
+    jira_fields = fetch_jira_fields()
+    start_date_field = find_start_date_field(jira_fields)
+
     # Fetch the stories of the epics, the single stories and the sprint stories, PARALLEL_CALLS calls
     # at a time. The results are added below in this order, as when they were fetched one by one.
     include_sprints = config.include_open_sprints or config.include_future_sprints
@@ -3210,14 +3236,16 @@ def run_gantt(config_path, history_dir=None, since=None):
         if config.epics:
             print(f"Fetching the stories of {len(config.epics)} "
                   f"{'epic' if len(config.epics) == 1 else 'epics'}...", file=sys.stderr)
-        epic_results = pool.map(fetch_stories_for_epic, config.epics)
+        epic_results = pool.map(lambda key: fetch_stories_for_epic(key, start_date_field), config.epics)
         if config.stories:
             print(f"Fetching {len(config.stories)} individual stories...", file=sys.stderr)
-        individual_result = pool.submit(fetch_stories_by_keys, config.stories) if config.stories else None
+        individual_result = pool.submit(fetch_stories_by_keys, config.stories,
+                                                start_date_field=start_date_field) if config.stories else None
         if include_sprints:
             print("Fetching sprint stories...", file=sys.stderr)
         sprint_result = (pool.submit(fetch_sprint_stories, config.include_open_sprints,
-                                     config.include_future_sprints) if include_sprints else None)
+                                     config.include_future_sprints, start_date_field)
+                         if include_sprints else None)
         epic_results = list(epic_results)
 
     # Expand epics into stories
@@ -3272,7 +3300,7 @@ def run_gantt(config_path, history_dir=None, since=None):
                 dep_keys_needed.add(dep_key)
     if dep_keys_needed:
         print(f"Fetching {len(dep_keys_needed)} dependency stories...", file=sys.stderr)
-        dep_issues = fetch_stories_by_keys(list(dep_keys_needed))
+        dep_issues = fetch_stories_by_keys(list(dep_keys_needed), start_date_field=start_date_field)
         for key in dep_keys_needed:
             if key not in dep_issues or key in story_data:
                 continue
@@ -3307,6 +3335,25 @@ def run_gantt(config_path, history_dir=None, since=None):
         parent = issue["fields"].get("parent")
         issue["_epic_key"] = (parent.get("key", "") if parent
                               else issue["fields"].get("customfield_10014", ""))
+
+    # Read the start and due dates of the epics. An epic without stories is shown with these dates.
+    epic_keys = list(dict.fromkeys(list(config.epics) + [issue["_epic_key"] for issue in story_data.values()
+                                                         if issue.get("_epic_key")]))
+    epics_info = {}
+    if epic_keys:
+        print(f"Fetching the dates of {len(epic_keys)} epics...", file=sys.stderr)
+        field_names = {field["id"]: field.get("name", field["id"]) for field in jira_fields if field.get("id")}
+        for badge in config.badges:
+            if jira_fields and badge["field"] not in field_names:
+                print(f"Warning: badge field {badge['field']} is not a field in Jira, "
+                      f"so no epic gets this badge", file=sys.stderr)
+        epics_info = fetch_epics(epic_keys, start_date_field, config.badges, field_names)
+
+    # An open story is not planned before its Start date in Jira, or without one, that of its epic
+    for issue in story_data.values():
+        story_start = (issue["fields"].get(start_date_field) or "")[:10] if start_date_field else ""
+        epic_start = epics_info.get(issue.get("_epic_key", ""), {}).get("start", "")
+        issue["_start_date"] = story_start or epic_start
 
     # The status history is needed for the done stories, and for the open stories that are at the
     # implementation status or a later one: only those can have spent time there
@@ -3387,18 +3434,6 @@ def run_gantt(config_path, history_dir=None, since=None):
                 r["issue_type"] = issue_type.get("name", "")
                 r["issue_type_icon_url"] = issue_type.get("iconUrl", "")
 
-    # Read the start and due dates of the epics. An epic without stories is shown with these dates.
-    epic_keys = list(dict.fromkeys(list(config.epics) + [s["epic_key"] for s in scheduled if s.get("epic_key")]))
-    epics_info = {}
-    if epic_keys:
-        print(f"Fetching the dates of {len(epic_keys)} epics...", file=sys.stderr)
-        jira_fields = fetch_jira_fields()
-        field_names = {field["id"]: field.get("name", field["id"]) for field in jira_fields if field.get("id")}
-        for badge in config.badges:
-            if jira_fields and badge["field"] not in field_names:
-                print(f"Warning: badge field {badge['field']} is not a field in Jira, "
-                      f"so no epic gets this badge", file=sys.stderr)
-        epics_info = fetch_epics(epic_keys, find_start_date_field(jira_fields), config.badges, field_names)
     roadmap_epics = []
     for key in empty_epics:
         info = epics_info.get(key)

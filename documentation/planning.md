@@ -37,7 +37,12 @@ Automatically assigned stories receive an `AUTO` badge in the chart.
 
 ## Dates and status history
 
-Open work starts today at the earliest. When `implementation_status` is configured, time already
+Open work starts today at the earliest. A story that has not started yet also waits for its Start
+date in Jira, or, when it has none, for the Start date of its epic. The planner takes stories in
+order, so stories ranked lower for the same person come after it, even when that person is free
+before the Start date. A started or done story is not moved. The tooltip shows the Start date used.
+
+When `implementation_status` is configured, time already
 spent at that status or later is shown in the past and deducted from the remaining estimate. Periods
 after a story moves back to an earlier status do not count.
 
