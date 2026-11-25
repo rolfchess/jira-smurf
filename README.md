@@ -2,7 +2,8 @@
 
 ![Example Gantt chart](example-gantt.png)
 
-`jira-smurf` is a command-line tool for Jira Cloud. It can:
+`jira-smurf` is a command-line tool for Jira Cloud. Jira Server and Data Center use another API,
+so they do not work with it yet. It can:
 
 - export a project's stories as CSV or HTML;
 - schedule stories across a team and create an interactive Gantt chart;

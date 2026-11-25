@@ -204,6 +204,7 @@ class GanttConfig:
     status_colors: dict  # {lowercase_name: css_color}
     work_start_progress: float  # progress of the status where work on a story starts, 0 if not set
     use_backlog_order: bool  # schedule stories in Jira backlog order instead of the order of the configuration file
+    group_by_space: bool  # with use_backlog_order, put the epics under a header row per Jira space
     dependency_links: list  # lowercase names of Jira link types that make a story wait for another
     auto_assign: bool  # give stories without a team member to the team; if False, plan them under "Unassigned"
     implementation_status: str  # status where open stories show their days of work in a badge, "" if not set
@@ -400,6 +401,7 @@ def load_gantt_config(path="gantt.toml"):
     include_open_sprints = raw.get("include_open_sprints", False)
     include_future_sprints = raw.get("include_future_sprints", False)
     use_backlog_order = raw.get("use_backlog_order", False)
+    group_by_space = raw.get("group_by_space", True)
     dependency_links = raw.get("dependency_links", ["Blocks"])
     if not isinstance(dependency_links, list) or not all(isinstance(name, str) for name in dependency_links):
         print(f"Error: 'dependency_links' must be a list of Jira link type names, got {dependency_links!r}",
@@ -407,7 +409,8 @@ def load_gantt_config(path="gantt.toml"):
         sys.exit(1)
     for name, val in (("include_open_sprints", include_open_sprints),
                       ("include_future_sprints", include_future_sprints),
-                      ("use_backlog_order", use_backlog_order)):
+                      ("use_backlog_order", use_backlog_order),
+                      ("group_by_space", group_by_space)):
         if not isinstance(val, bool):
             print(f"Error: '{name}' must be true or false, got {val!r}", file=sys.stderr)
             sys.exit(1)
@@ -436,6 +439,7 @@ def load_gantt_config(path="gantt.toml"):
                        status_colors=status_colors,
                        work_start_progress=work_start_progress,
                        use_backlog_order=use_backlog_order,
+                       group_by_space=group_by_space,
                        dependency_links=[name.lower() for name in dependency_links],
                        auto_assign=auto_assign_team,
                        implementation_status=implementation_status or "",
@@ -1522,11 +1526,12 @@ def format_signed(value, unit):
     return f"{sign}{number}{unit}"
 
 
-def trend_html(snapshots, epic_color_map, holidays, compare_date=None):
+def trend_html(snapshots, epic_color_map, holidays, compare_date=None, epic_spaces=None):
     """Return the HTML of a milestone trend chart: the planned end of each epic at each run.
 
     The table below the chart compares the latest run with the run of compare_date, or with
-    the oldest run if compare_date is None.
+    the oldest run if compare_date is None. With epic_spaces, {epic name: Jira space name}, the
+    table has a header row above the epics of each space.
 
     The x axis is the run date and the y axis the planned end date. A flat line means the
     end date did not move. Only epics in epic_color_map are drawn, in their epic color.
@@ -1613,8 +1618,8 @@ def trend_html(snapshots, epic_color_map, holidays, compare_date=None):
     )
 
     compare_run = date.fromisoformat(compare_date) if compare_date else runs[0]
-    rows = []
-    for name, points in list(series.items()) + [("Whole plan", whole_plan)]:
+
+    def table_row(name, points, css_class=""):
         then, last = dict(points).get(compare_run), points[-1][1]
         if then is None:
             then_cell = moved_cell = "–"
@@ -1622,8 +1627,20 @@ def trend_html(snapshots, epic_color_map, holidays, compare_date=None):
             moved = working_days_between(then + timedelta(days=1), last + timedelta(days=1), holidays)
             then_cell = then.isoformat()
             moved_cell = format_signed(moved, " working days") if moved else "no change"
-        rows.append(f"<tr><td>{html.escape(name)}</td><td>{then_cell}</td>"
-                    f"<td>{last}</td><td>{moved_cell}</td></tr>")
+        row_class = f' class="{css_class}"' if css_class else ""
+        return (f"<tr{row_class}><td>{html.escape(name)}</td><td>{then_cell}</td>"
+                f"<td>{last}</td><td>{moved_cell}</td></tr>")
+
+    rows = []
+    current_space = None
+    for name, points in series.items():
+        space = (epic_spaces or {}).get(name, "")
+        # An epic without a space after a space group gets its own header, so it does not look part of that group
+        if epic_spaces and space != current_space and (space or current_space):
+            rows.append(f'<tr class="space-row"><th colspan="4">{html.escape(space or "No space")}</th></tr>')
+        current_space = space
+        rows.append(table_row(name, points))
+    rows.append(table_row("Whole plan", whole_plan, "whole-plan-row"))
     table = ("<details><summary>Show as table</summary><table><tr><th>Epic</th>"
              f"<th>Planned end {compare_run}</th>"
              "<th>Latest planned end</th><th>Moved</th></tr>" + "".join(rows) + "</table></details>")
@@ -1807,6 +1824,9 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
 
     spaces = {row_space(kind, row).get("space", "") for kind, row in epic_rows if row != NO_EPIC} - {""}
     use_spaces = group_by_space and len(spaces) > 1
+    # {epic row name: space name} for the table of the trend chart
+    epic_spaces = {(row if kind == "stories" else row["name"]): row_space(kind, row).get("space", "")
+                   for kind, row in epic_rows if row != NO_EPIC} if use_spaces else None
     space_task_ids = {}  # {space name: task id}
     epic_parents = {}    # {epic task id: space task id}
 
@@ -2045,7 +2065,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     icon_images_json = json.dumps(icon_images or {})
     plans_json = json.dumps(plan_history(snapshots, date.today()), separators=(",", ":"))
     compare_date_json = json.dumps(compare_date)
-    trend = trend_html(list(snapshots), epic_color_map, set(holidays), compare_date)
+    trend = trend_html(list(snapshots), epic_color_map, set(holidays), compare_date, epic_spaces)
 
     # The outline of a story or epic that ends after its due date, blinking or not
     visuals = visuals or DEFAULT_VISUALS
@@ -2276,6 +2296,11 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   .trend-help {{ font-size: 13px; color: #555; margin: 0; }}
   #trend table {{ border-collapse: collapse; margin-top: 6px; }}
   #trend th, #trend td {{ border: 1px solid #ddd; padding: 4px 10px; text-align: left; }}
+  /* The colors of the space rows of the chart */
+  #trend tr.space-row th {{
+    background: #dde4ec; color: #34495e; font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px;
+  }}
+  #trend tr.whole-plan-row td {{ font-weight: 700; }}
   .type-icon {{ margin-right: 5px; }}
   img.type-icon {{ width: 16px; height: 16px; vertical-align: -3px; }}
   .tree-buttons {{ margin-left: 12px; }}
@@ -2725,8 +2750,10 @@ function setAllOpen(open) {{
 function setZoom(level) {{
   gantt.ext.zoom.setLevel(level);
   makeLabelRoom(false);
+  // Fit All picks a level itself, but its own button is the one to mark
+  var active = chosenZoom || "fit all";
   document.querySelectorAll("#toolbar button").forEach(function(b) {{
-    b.classList.toggle("active", b.textContent.toLowerCase() === level);
+    b.classList.toggle("active", b.textContent.toLowerCase() === active);
   }});
 }}
 var LABEL_ROOM = 300;  // pixels after the last bar, for the text next to it such as the assignee and the end date
@@ -3583,16 +3610,19 @@ def run_gantt(config_path, history_dir=None, since=None):
         print(f"  Epic {key} has no stories yet, showing its dates from Jira", file=sys.stderr)
         roadmap_epics.append(info)
 
-    # The epic rows follow the configuration file, or with use_backlog_order the name of the Jira space
-    # of the epics and then their Jira rank
+    # The epic rows follow the configuration file, or with use_backlog_order their Jira rank. With
+    # group_by_space, they are sorted by the name of their Jira space first, so each space has its epics together.
     epic_order = list(config.epics)
     if config.use_backlog_order and epic_keys:
         print("Fetching the rank of the epics...", file=sys.stderr)
         epic_positions = fetch_backlog_order(epic_keys)
 
         def epic_sort_key(key):
+            rank = epic_positions.get(key, len(epic_positions))
+            if not config.group_by_space:
+                return rank
             space = epics_info.get(key, {}).get("space", "")
-            return (space == "", space.lower(), epic_positions.get(key, len(epic_positions)))
+            return (space == "", space.lower(), rank)
         epic_order = sorted(epic_keys, key=epic_sort_key)
 
     # Put the Jira issue type icons into the page, so it shows them without a Jira login
@@ -3602,7 +3632,7 @@ def run_gantt(config_path, history_dir=None, since=None):
     if epic_icon_url:
         icon_urls.append(epic_icon_url)
     # The avatars of the spaces, for their header rows
-    if config.use_backlog_order:
+    if config.use_backlog_order and config.group_by_space:
         icon_urls += [info["space_avatar"] for info in epics_info.values() if info.get("space_avatar")]
     icon_images = {}
     if icon_urls:
@@ -3612,7 +3642,7 @@ def run_gantt(config_path, history_dir=None, since=None):
     write_gantt_html(scheduled, config.statuses, config.dependencies, config.holidays, config.status_colors,
                      compare_date, snapshots, removed, icon_images, epic_icon_url, epics_info, roadmap_epics,
                      epic_order,
-                     config.visuals, group_by_space=config.use_backlog_order,
+                     config.visuals, group_by_space=config.use_backlog_order and config.group_by_space,
                      keep_story_order=config.use_backlog_order)
 
 
