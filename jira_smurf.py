@@ -15,6 +15,7 @@ import os
 import re
 import sys
 import threading
+import urllib.parse
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -1471,91 +1472,6 @@ def epic_spans(stories):
     return spans
 
 
-def compare_plans(baseline, current, holidays, today):
-    """Compare two snapshots and return the changes per story and per epic, and totals.
-
-    Returns a dict with:
-        since: date of the baseline
-        stories: {key: {is_new, base_start, base_end, base_total, hours_delta, moved_days, late}}
-        epics: {epic name: {base_start, base_end, moved_days}}
-        removed: [baseline story, ...] for open stories that are no longer in the plan
-        summary: totals for the summary box
-    """
-    base_by_key = {s["key"]: s for s in baseline["stories"]}
-    current_keys = {s["key"] for s in current["stories"]}
-    today_str = today.isoformat()
-
-    stories = {}
-    summary = {
-        "new": [], "new_hours": 0.0,
-        "grew": [], "grew_hours": 0.0,
-        "shrank": [], "shrank_hours": 0.0,
-        "late": [], "late_hours": 0.0,
-    }
-    for s in current["stories"]:
-        done = s["progress"] >= 1.0
-        base = base_by_key.get(s["key"])
-        if base is None:
-            stories[s["key"]] = {"is_new": True}
-            summary["new"].append(s)
-            summary["new_hours"] += s["remaining_hours"]
-            continue
-        change = {"is_new": False}
-        if not done:
-            change["base_start"] = base["start"]
-            change["base_end"] = base["end"]
-            change["moved_days"] = working_days_between(
-                date.fromisoformat(base["end"]), date.fromisoformat(s["end"]), holidays)
-            if base.get("total_hours") is not None:
-                change["base_total"] = base["total_hours"]
-                delta = s["total_hours"] - base["total_hours"]
-                if abs(delta) >= 0.5:
-                    change["hours_delta"] = delta
-                    if delta > 0:
-                        summary["grew"].append(s)
-                        summary["grew_hours"] += delta
-                    else:
-                        summary["shrank"].append(s)
-                        summary["shrank_hours"] += delta
-            if base["progress"] < 1.0 and base["end"] <= today_str:
-                change["late"] = True
-                summary["late"].append(s)
-                summary["late_hours"] += s["remaining_hours"]
-        stories[s["key"]] = change
-
-    removed = [s for s in baseline["stories"] if s["key"] not in current_keys and s["progress"] < 1.0]
-    summary["removed"] = removed
-    summary["removed_hours"] = sum(s["remaining_hours"] for s in removed)
-
-    epics = {}
-    base_spans = epic_spans(baseline["stories"])
-    for epic, (start, end) in epic_spans(current["stories"]).items():
-        if epic not in base_spans:
-            continue
-        base_start, base_end = base_spans[epic]
-        epics[epic] = {
-            "base_start": base_start,
-            "base_end": base_end,
-            "moved_days": working_days_between(date.fromisoformat(base_end), date.fromisoformat(end), holidays),
-        }
-
-    base_end = max((s["end"] for s in baseline["stories"]), default=None)
-    end = max((s["end"] for s in current["stories"]), default=None)
-    summary["base_end"] = base_end
-    summary["end"] = end
-    summary["moved_days"] = (working_days_between(date.fromisoformat(base_end), date.fromisoformat(end), holidays)
-                             if base_end and end else 0)
-    summary["base_remaining"] = sum(s["remaining_hours"] for s in baseline["stories"])
-    summary["remaining"] = sum(s["remaining_hours"] for s in current["stories"])
-
-    return {"since": baseline["date"], "stories": stories, "epics": epics, "removed": removed, "summary": summary}
-
-
-def format_last_day(iso_end):
-    """Return the last planned day for an end date that is the day after it, as YYYY-MM-DD."""
-    return (date.fromisoformat(iso_end) - timedelta(days=1)).isoformat()
-
-
 def format_hours(hours):
     """Return hours as "8h" or "7.5h"."""
     return f"{hours:.0f}h" if hours == int(hours) else f"{hours:.1f}h"
@@ -1608,46 +1524,6 @@ def format_signed(value, unit):
     sign = "+" if value > 0 else "−" if value < 0 else ""
     number = format_hours(abs(value))[:-1] if unit == "h" else f"{abs(value):g}"
     return f"{sign}{number}{unit}"
-
-
-def changes_summary_html(changes):
-    """Return the HTML of the box that explains how the plan changed since the baseline."""
-    s = changes["summary"]
-
-    def story_list(stories):
-        items = "".join(
-            f"<li><a href=\"{html.escape(JIRA_URL)}/browse/{html.escape(st['key'])}\" target=\"_blank\">"
-            f"{html.escape(st['key'])}</a>: {html.escape(st['title'])}</li>"
-            for st in stories
-        )
-        return f"<details><summary>Show stories</summary><ul>{items}</ul></details>" if stories else ""
-
-    def row(label, stories, hours):
-        count = len(stories)
-        noun = "story" if count == 1 else "stories"
-        return (f"<li><b>{count} {label.format(noun=noun)}</b>: {format_signed(hours, 'h')}"
-                f"{story_list(stories)}</li>")
-
-    if s["end"] and s["base_end"]:
-        moved = s["moved_days"]
-        days = format_signed(moved, " working days") if moved else "no change"
-        end_line = (f"<p>The plan end moved from <b>{format_last_day(s['base_end'])}</b> "
-                    f"to <b>{format_last_day(s['end'])}</b> ({days}).</p>")
-    else:
-        end_line = ""
-    return f"""<div id="changes-summary">
-<h3>Changes since {changes['since']}</h3>
-{end_line}
-<p>Remaining work went from {format_hours(s['base_remaining'])} to {format_hours(s['remaining'])}.</p>
-<ul>
-{row("new {noun}", s["new"], s["new_hours"])}
-{row("{noun} with a larger estimate", s["grew"], s["grew_hours"])}
-{row("{noun} with a smaller estimate", s["shrank"], s["shrank_hours"])}
-{row("{noun} no longer in the plan", s["removed"], -s["removed_hours"])}
-<li><b>{len(s["late"])} {"story" if len(s["late"]) == 1 else "stories"} planned to be done by now but still open</b>:
-{format_hours(s["late_hours"])} remaining{story_list(s["late"])}</li>
-</ul>
-</div>"""
 
 
 def trend_html(snapshots, epic_color_map, holidays, compare_date=None, epic_spaces=None):
@@ -1807,6 +1683,40 @@ def issue_type_icon(issue_type):
     return ISSUE_TYPE_ICONS.get(issue_type.lower(), OTHER_ISSUE_TYPE_ICON)
 
 
+def plan_history(snapshots, today):
+    """Return the snapshots before today, newest first, for the plan comparison in the chart.
+
+    Each is {"date", "stories": {key: [start, end, progress, total hours, remaining hours, status]}},
+    with end the day after the last planned day.
+    """
+    plans = []
+    for snap in snapshots:
+        if snap["date"] >= today.isoformat():
+            continue
+        plans.append({
+            "date": snap["date"],
+            "stories": {s["key"]: [s["start"], s["end"], s["progress"], s.get("total_hours"),
+                                   s["remaining_hours"], s["status"]] for s in snap["stories"]},
+        })
+    plans.sort(key=lambda plan: plan["date"], reverse=True)
+    return plans
+
+
+def removed_stories(snapshots, current_keys, today):
+    """Return the stories that are open in a snapshot before today and not in current_keys.
+
+    Each story is given once, as in the newest snapshot that has it.
+    """
+    removed = {}
+    for snap in sorted(snapshots, key=lambda snap: snap["date"], reverse=True):
+        if snap["date"] >= today.isoformat():
+            continue
+        for s in snap["stories"]:
+            if s["key"] not in current_keys and s["key"] not in removed and s["progress"] < 1.0:
+                removed[s["key"]] = s
+    return list(removed.values())
+
+
 # The thin line of a space row in the timeline
 SPACE_COLOR = "#8a9bb0"
 
@@ -1817,12 +1727,14 @@ EPIC_COLORS = [
 
 
 def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=(), status_colors=None,
-                     changes=None, snapshots=(), icon_images=None, epic_icon_url="",
+                     compare_date=None, snapshots=(), removed=(), icon_images=None, epic_icon_url="",
                      epics_info=None, roadmap_epics=(), epic_order=(), visuals=None, group_by_space=False,
                      keep_story_order=False):
     """Write a self-contained HTML file with a DHTMLX Gantt chart.
 
-    With changes (from compare_plans), the chart can mark what changed since the baseline.
+    With snapshots from before today, the page can compare the plan with any of them: its list picks
+    one, compare_date (a snapshot date) at first. removed (from removed_stories) are the stories that
+    are open in an earlier snapshot and no longer in the plan.
     With two or more snapshots, a trend chart of the planned end dates is added below it.
     icon_images is {icon address: data URI} for the issue type icons from Jira. A type
     without an image there is shown with an emoji.
@@ -2014,7 +1926,6 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             "hours": epic_effort,
             "points_value": epic_points,
             **badge_fields(epic_name_to_key.get(epic_name, "")),
-            **(changes["epics"].get(epic_name, {}) if changes else {}),
         })
 
     # A space row spans the bars of its epics and adds up their hours and points
@@ -2085,12 +1996,13 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             "icon": issue_type_icon(s.get("issue_type", "")),
             "icon_url": s.get("issue_type_icon_url", ""),
             "unestimated": unestimated,
-            **(changes["stories"].get(s["key"], {}) if changes else {}),
+            # The estimate including the done part, to compare with an earlier plan
+            "total_hours": s.get("total_hours", 0),
         })
 
-    # Open stories of the baseline that are no longer in the plan, in one group at the end
-    if changes and changes["removed"]:
-        removed = changes["removed"]
+    # Stories that are open in an earlier plan and no longer in this one, in one group at the end. The page
+    # shows those of the compared plan, with their dates and status in that plan.
+    if removed:
         task_id += 1
         group_id = task_id
         tasks.append({
@@ -2101,7 +2013,8 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             "effort": format_hours(sum(r["remaining_hours"] for r in removed)),
             "status": "",
             "color": "#bbb",
-            "type": "project",
+            # Not a "project": that takes its dates from all its stories, also those the page hides
+            "type": "task",
             "open": True,
             "progress": 0,
             "removed": True,
@@ -2149,20 +2062,10 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     tasks_json = json.dumps(tasks, indent=2)
     links_json = json.dumps(links, indent=2)
     holidays_json = json.dumps(sorted(d.isoformat() for d in holidays))
-    show_changes_json = "true" if changes else "false"
     icon_images_json = json.dumps(icon_images or {})
-    if changes:
-        since = changes["since"]
-        changes_toggle = (f'<label id="show-changes-wrap"><input type="checkbox" id="show-changes" checked '
-                          f'onchange="onShowChangesChange()"> Show changes since {since}</label>')
-        moved_column = (',\n  {name: "moved", label: "Moved", align: "center", width: 70, resize: true,'
-                        ' template: movedText}')
-    else:
-        changes_toggle = ""
-        moved_column = ""
-    summary_html = changes_summary_html(changes) if changes else ""
-    trend = trend_html(list(snapshots), epic_color_map, set(holidays), changes["since"] if changes else None,
-                       epic_spaces)
+    plans_json = json.dumps(plan_history(snapshots, date.today()), separators=(",", ":"))
+    compare_date_json = json.dumps(compare_date)
+    trend = trend_html(list(snapshots), epic_color_map, set(holidays), compare_date, epic_spaces)
 
     # The outline of a story or epic that ends after its due date, blinking or not
     visuals = visuals or DEFAULT_VISUALS
@@ -2344,7 +2247,6 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   }}
   #gantt_here .gantt_row.search-match-row::after {{ border-right: none; }}
   #gantt_here .gantt_task_row.search-match-row::after {{ border-left: none; }}
-  #show-changes-wrap {{ display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }}
   #gantt_here .gantt_row.change-new-row, #gantt_here .gantt_task_row.change-new-row {{ background: #fff3bf; }}
   /* The row under the mouse darkens in the grid and in the timeline. The row colors above have the
      #gantt_here prefix, so they win over the grey hover of dhtmlx, and this layer darkens them. */
@@ -2366,7 +2268,14 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   .delta-down {{ color: #2e7d32; font-weight: 600; }}
   .due-marker {{ position: absolute; width: 10px; height: 10px; background: #d62728; border: 1px solid #fff;
     transform: rotate(45deg); pointer-events: none; z-index: 2; }}
-  .baseline-bar {{ position: absolute; height: 3px; background: #888; border-radius: 2px; pointer-events: none; }}
+  /* The dates of a story, epic or space in the compared plan: a thin striped line under its bar */
+  .baseline-bar {{ position: absolute; height: 4px; background-color: #888; border-radius: 2px; pointer-events: none;
+    background-image: repeating-linear-gradient(135deg, rgba(255,255,255,0.6) 0 2px, transparent 2px 5px); }}
+  #compare-plan-wrap {{ display: flex; align-items: center; gap: 6px; font-size: 13px; }}
+  #compare-plan-wrap[hidden] {{ display: none; }}
+  #compare-plan {{ padding: 4px 6px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; background: #fff; }}
+  #compare-plan.comparing {{ border-color: #4e79a7; box-shadow: 0 0 0 1px #4e79a7; }}
+  #changes-summary[hidden] {{ display: none; }}
   #changes-summary, #trend {{ margin-top: 20px; padding: 10px 16px; background: #f8f8f8; border-radius: 6px; }}
   #changes-summary h3, #trend h3 {{ margin: 4px 0 8px; }}
   #changes-summary ul {{ margin: 6px 0; }}
@@ -2415,7 +2324,10 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     <button onclick="chooseZoom(null)">Fit All</button>
   </div>
   <label id="show-done-wrap"><input type="checkbox" id="show-done" onchange="applyFilters()"> Show done stories</label>
-  {changes_toggle}
+  <label id="compare-plan-wrap" hidden title="Show the changes since an earlier plan, and its dates as a striped line under the bars">
+    Compare with plan
+    <select id="compare-plan" onchange="onComparePlanChange()"><option value="">none</option></select>
+  </label>
   <div id="search-wrap">
     <input id="search-input" type="search" placeholder="Search stories, for example PROJ-123" oninput="onSearchTyping()" onkeydown="if(event.key==='Escape'){{this.value='';clearTimeout(searchTimer);onSearchInput();}}">
     <span id="search-count"></span>
@@ -2479,13 +2391,13 @@ function refreshChart() {{
 }}
 </script>
 <div id="gantt_here"></div>
-{summary_html}
+<div id="changes-summary" hidden></div>
 {trend}
 <script src="https://cdn.dhtmlx.com/gantt/9.0/dhtmlxgantt.js"></script>
 <script>
 gantt.plugins({{ marker: true }});
 var typeIconImages = {icon_images_json};  // {{icon address: data URI}} of the issue type icons from Jira
-var showChanges = {show_changes_json};
+var showChanges = false;  // true while a plan is picked in the Compare with plan list
 function signed(value, unit) {{
   var number = Math.round(Math.abs(value) * 10) / 10;
   return (value > 0 ? "+" : "\u2212") + number + unit;
@@ -2498,9 +2410,213 @@ function movedText(task) {{
   var cls = task.moved_days > 0 ? "delta-up" : "delta-down";
   return "<span class='" + cls + "'>" + signed(task.moved_days, "d") + "</span>";
 }}
-function onShowChangesChange() {{
-  showChanges = document.getElementById("show-changes").checked;
-  gantt.render();
+// The plans before today, newest first: {{date, stories: {{key: [start, end, progress, total hours,
+// remaining hours, status]}}}}. End is the day after the last planned day.
+var earlierPlans = {plans_json};
+var defaultComparePlan = {compare_date_json};  // the plan of --since, used when the address names none
+var comparePlan = null;  // the plan picked in the Compare with plan list
+function workingDaysBetween(from, to) {{
+  var sign = 1;
+  if (to < from) {{ var t = from; from = to; to = t; sign = -1; }}
+  var days = 0;
+  for (var d = new Date(from); d < to; d = gantt.date.add(d, 1, "day")) {{
+    if (d.getDay() !== 0 && d.getDay() !== 6 && !holidays.has(dayKey(d))) days++;
+  }}
+  return sign * days;
+}}
+function formatHours(hours) {{
+  return Math.round(hours * 10) / 10 + "h";
+}}
+// The latest plan on or before a date, or the oldest plan when there is none
+function planOnOrBefore(day) {{
+  var plans = earlierPlans.filter(function(plan) {{ return plan.date <= day; }});
+  return plans.length ? plans[0] : earlierPlans[earlierPlans.length - 1];
+}}
+// Mark each task with its changes since the compared plan, as the Moved column, the striped lines,
+// the info popup and the summary use them, and fill in the stories that are no longer in the plan.
+function applyComparison() {{
+  var plan = comparePlan;
+  showChanges = !!plan;
+  var parse = gantt.date.str_to_date("%Y-%m-%d");
+  var today = dayKey(new Date());
+  var fields = ["is_new", "base_start", "base_end", "base_open", "base_total", "hours_delta", "moved_days", "late",
+                "in_compare"];
+  var summary = {{ newStories: [], newHours: 0, grew: [], grewHours: 0, shrank: [], shrankHours: 0,
+                   late: [], lateHours: 0, removed: [], removedHours: 0, end: null, remaining: 0 }};
+  var removedGroup = null;
+  gantt.eachTask(function(task) {{
+    fields.forEach(function(field) {{ delete task[field]; }});
+    if (task.removed && !task.parent) removedGroup = task;
+    if (!plan || task.removed || task.is_epic || task.is_space || !task.story_key) return;
+    // A story still in the plan
+    summary.remaining += task.hours || 0;
+    if (!summary.end || task.end_date > summary.end) summary.end = task.end_date;
+    var base = plan.stories[task.story_key];
+    if (!base) {{
+      task.is_new = true;
+      summary.newStories.push(task);
+      summary.newHours += task.hours || 0;
+      return;
+    }}
+    task.base_start = base[0];
+    task.base_end = base[1];
+    task.base_open = base[2] < 1;
+    // For a done story, the bar shows the days it was worked on, so this is how much earlier or later
+    // it finished than that plan said
+    task.moved_days = workingDaysBetween(parse(base[1]), task.end_date);
+    if (task.progress >= 1) return;
+    if (base[3] !== null && base[3] !== undefined) {{
+      var delta = (task.total_hours || 0) - base[3];
+      if (Math.abs(delta) >= 0.5) {{
+        task.base_total = base[3];
+        task.hours_delta = delta;
+        if (delta > 0) {{ summary.grew.push(task); summary.grewHours += delta; }}
+        else {{ summary.shrank.push(task); summary.shrankHours += delta; }}
+      }}
+    }}
+    if (base[2] < 1 && base[1] <= today) {{
+      task.late = true;
+      summary.late.push(task);
+      summary.lateHours += task.hours || 0;
+    }}
+  }});
+  // The open stories of the compared plan that are no longer in the plan, with their dates in that plan
+  if (removedGroup) {{
+    var first = null, last = null;
+    gantt.eachTask(function(task) {{
+      var base = plan && plan.stories[task.story_key];
+      if (!base || base[2] >= 1) return;
+      task.in_compare = true;
+      task.start_date = parse(base[0]);
+      task.end_date = parse(base[1]);
+      task.status = base[5];
+      task.effort = formatHours(base[4]);
+      summary.removed.push(task);
+      summary.removedHours += base[4];
+      if (!first || task.start_date < first) first = task.start_date;
+      if (!last || task.end_date > last) last = task.end_date;
+    }}, removedGroup.id);
+    if (first) {{
+      removedGroup.in_compare = true;
+      removedGroup.start_date = first;
+      removedGroup.end_date = last;
+      removedGroup.effort = formatHours(summary.removedHours);
+    }}
+  }}
+  gantt.config.columns = gantt.config.columns.filter(function(column) {{ return column !== movedColumn; }});
+  if (plan) gantt.config.columns.push(movedColumn);
+  showChangesSummary(plan, summary);
+}}
+// The dates of each epic and space in the compared plan, from the same stories as its bar: those that the
+// filters show. With done stories hidden, the line of an epic so starts where its first open story was
+// planned, not where its done stories were. Call it after the filters set the dates of the bars.
+function compareGroups() {{
+  if (!comparePlan) return;
+  var parse = gantt.date.str_to_date("%Y-%m-%d");
+  function span(task, children, isShown) {{
+    delete task.base_start;
+    delete task.base_end;
+    delete task.moved_days;
+    children.forEach(function(child) {{
+      if (!child.base_start || !isShown(child)) return;
+      if (!task.base_start || child.base_start < task.base_start) task.base_start = child.base_start;
+      if (!task.base_end || child.base_end > task.base_end) task.base_end = child.base_end;
+    }});
+    if (task.base_end) task.moved_days = workingDaysBetween(parse(task.base_end), task.end_date);
+  }}
+  function children(task) {{
+    return gantt.getChildren(task.id).map(function(id) {{ return gantt.getTask(id); }});
+  }}
+  // The stories without an epic are a group, not one piece of work, so it gets no bar and no changes
+  gantt.eachTask(function(task) {{
+    if (task.is_epic && !task.roadmap && !task.no_bar) span(task, children(task), isStoryShown);
+  }});
+  gantt.eachTask(function(task) {{
+    if (task.is_space) span(task, children(task), isTaskShownByFilters);
+  }});
+}}
+// The box under the chart that explains how the plan changed since the compared plan
+function showChangesSummary(plan, s) {{
+  var box = document.getElementById("changes-summary");
+  box.hidden = !plan;
+  if (!plan) {{ box.innerHTML = ""; return; }}
+  var parse = gantt.date.str_to_date("%Y-%m-%d");
+  function escape(text) {{
+    return String(text).replace(/[&<>"']/g, function(c) {{
+      return {{"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}}[c];
+    }});
+  }}
+  function storyList(stories) {{
+    if (!stories.length) return "";
+    return "<details><summary>Show stories</summary><ul>" + stories.map(function(task) {{
+      // The text of a task is "KEY: title"
+      return "<li><a href='{JIRA_URL}/browse/" + encodeURIComponent(task.story_key) + "' target='_blank'>" +
+        escape(task.story_key) + "</a>" + escape(task.text.slice(task.story_key.length)) + "</li>";
+    }}).join("") + "</ul></details>";
+  }}
+  function hours(value) {{
+    return value ? signed(value, "h") : "0h";
+  }}
+  function row(label, stories, value) {{
+    var noun = stories.length === 1 ? "story" : "stories";
+    return "<li><b>" + stories.length + " " + label.replace("{{noun}}", noun) + "</b>: " + hours(value) +
+      storyList(stories) + "</li>";
+  }}
+  var baseEnd = null, baseRemaining = 0;
+  Object.keys(plan.stories).forEach(function(key) {{
+    var base = plan.stories[key];
+    if (!baseEnd || base[1] > baseEnd) baseEnd = base[1];
+    baseRemaining += base[4];
+  }});
+  var lastDay = gantt.date.date_to_str("%Y-%m-%d");
+  var endLine = "";
+  if (baseEnd && s.end) {{
+    var moved = workingDaysBetween(parse(baseEnd), s.end);
+    endLine = "<p>The plan end moved from <b>" + lastDay(gantt.date.add(parse(baseEnd), -1, "day")) + "</b> to <b>" +
+      lastDay(gantt.date.add(s.end, -1, "day")) + "</b> (" + (moved ? signed(moved, " working days") : "no change") +
+      ").</p>";
+  }}
+  box.innerHTML = "<h3>Changes since the plan of " + plan.date + "</h3>" + endLine +
+    "<p>Remaining work went from " + formatHours(baseRemaining) + " to " + formatHours(s.remaining) + ".</p><ul>" +
+    row("new {{noun}}", s.newStories, s.newHours) +
+    row("{{noun}} with a larger estimate", s.grew, s.grewHours) +
+    row("{{noun}} with a smaller estimate", s.shrank, s.shrankHours) +
+    row("{{noun}} no longer in the plan", s.removed, -s.removedHours) +
+    "<li><b>" + s.late.length + " " + (s.late.length === 1 ? "story" : "stories") +
+    " planned to be done by now but still open</b>: " + formatHours(s.lateHours) + " remaining" +
+    storyList(s.late) + "</li></ul>";
+}}
+// The list of earlier plans. The plan comes from ?compare= in the address, else from --since.
+function initComparePlan() {{
+  if (!earlierPlans.length) return;
+  var select = document.getElementById("compare-plan");
+  earlierPlans.forEach(function(plan) {{
+    var option = document.createElement("option");
+    option.value = plan.date;
+    option.textContent = plan.date;
+    select.appendChild(option);
+  }});
+  document.getElementById("compare-plan-wrap").hidden = false;
+  var asked = new URLSearchParams(location.search).get("compare");
+  if (asked === "none") comparePlan = null;
+  else if (asked && /^\\d{{4}}-\\d{{2}}-\\d{{2}}$/.test(asked)) comparePlan = planOnOrBefore(asked);
+  else if (defaultComparePlan) comparePlan = planOnOrBefore(defaultComparePlan);
+  select.value = comparePlan ? comparePlan.date : "";
+  select.classList.toggle("comparing", !!comparePlan);
+  applyComparison();
+}}
+function onComparePlanChange() {{
+  var select = document.getElementById("compare-plan");
+  comparePlan = earlierPlans.find(function(plan) {{ return plan.date === select.value; }}) || null;
+  select.classList.toggle("comparing", !!comparePlan);
+  // Keep the choice in the address, so a reload or a shared link shows the same comparison
+  try {{
+    var url = new URL(location.href);
+    url.searchParams.set("compare", select.value || "none");
+    history.replaceState(null, "", url);
+  }} catch (e) {{}}
+  applyComparison();
+  applyFilters();
 }}
 gantt.config.date_format = "%Y-%m-%d";
 gantt.config.readonly = true;
@@ -2529,8 +2645,10 @@ gantt.config.columns = [
   {{name: "sprint", label: "Sprint", align: "center", width: 70, resize: true,
     template: function(task) {{
       return task.sprint ? "<span title='" + task.sprint_name.replace(/'/g, "&#39;") + "'>" + task.sprint + "</span>" : "";
-    }} }}{moved_column}
+    }} }}
 ];
+// Shown while a plan is compared
+var movedColumn = {{name: "moved", label: "Moved", align: "center", width: 70, resize: true, template: movedText}};
 gantt.templates.tooltip_text = function(start, end, task) {{
   if (!task.text) return "";
   var fmt = gantt.date.date_to_str("%d %M %Y");
@@ -2549,12 +2667,27 @@ gantt.templates.tooltip_text = function(start, end, task) {{
     text += "<br/>Due: " + fmt(due) + (end > gantt.date.add(due, 1, "day") ? " (planned to end later)" : "");
   }}
   if (!showChanges) return text;
-  if (task.is_new) text += "<br/>New since the baseline";
-  if (task.removed && task.parent) text += "<br/>No longer in the plan";
+  var since = comparePlan.date;
+  if (task.is_new) text += "<br/>New since the plan of " + since;
+  if (task.removed && task.parent) text += "<br/>In the plan of " + since + ", no longer in the plan";
   if (task.base_start) {{
     var parse = gantt.date.str_to_date("%Y-%m-%d");
     var baseEnd = gantt.date.add(parse(task.base_end), -1, "day");
-    text += "<br/>Baseline: " + fmt(parse(task.base_start)) + " – " + fmt(baseEnd);
+    text += "<br/>Plan of " + since + ": " + fmt(parse(task.base_start)) + " – " + fmt(baseEnd);
+    if (task.moved_days) {{
+      text += " (<span class='" + (task.moved_days > 0 ? "delta-up" : "delta-down") + "'>" +
+        signed(task.moved_days, " working days") + "</span>)";
+    }}
+    // A story done since that plan: when it finished against that plan, and how long it took against its
+    // estimate. Not against the days of that plan, which only has the remaining work of a story in progress.
+    if (task.progress >= 1 && task.base_open) {{
+      var took = workingDaysBetween(task.start_date, task.end_date);
+      var days = function(n) {{ return n === 1 ? "1 working day" : n + " working days"; }};
+      text += "<br/>Done " + (task.moved_days < 0 ? days(-task.moved_days) + " earlier than planned"
+                              : task.moved_days > 0 ? days(task.moved_days) + " later than planned" : "on the planned day") +
+        ". It took " + days(took) + "; its estimate is " + days(task.estimate_days) +
+        (task.points ? " (" + task.points + " SP)" : "") + ".";
+    }}
   }}
   if (task.hours_delta) text += "<br/>Estimate: " + task.base_total + "h → " + (task.base_total + task.hours_delta) + "h";
   if (task.late) text += "<br/>Planned to be done by now";
@@ -2673,7 +2806,7 @@ function isStoryShown(task) {{
   return Object.keys(selectedMembers).length === 0 || !!selectedMembers[task.assignee];
 }}
 function isTaskShown(task) {{
-  if (task.removed) return showChanges;
+  if (task.removed) return showChanges && !!task.in_compare;
   // A search shows its matches and their epics, also when a filter hides them
   if (searchVisibleIds[task.id]) return true;
   return isTaskShownByFilters(task);
@@ -2820,6 +2953,7 @@ function applyFilters() {{
     task.effort = totals.effort;
     task.points = totals.points;
   }});
+  compareGroups();
   updateMemberCounts();
   showShownDates();
 }}
@@ -3043,7 +3177,7 @@ gantt.templates.timeline_cell_class = function(task, date) {{
   if (date.getDay() === 0 || date.getDay() === 6 || holidays.has(dayKey(date))) return "weekend";
   return "";
 }};
-// Thin bars at the baseline dates, under the real bars, in the dark shade of the bar color.
+// Thin striped lines at the dates of the compared plan, under the bars, in the dark shade of the bar color.
 function drawBaselineBars() {{
   var area = gantt.$task_data;
   if (!area) return;
@@ -3057,12 +3191,12 @@ function drawBaselineBars() {{
   if (!showChanges) return;
   var parse = gantt.date.str_to_date("%Y-%m-%d");
   gantt.eachTask(function(task) {{
-    if (!task.base_start || !gantt.isTaskVisible(task.id)) return;
+    if (!task.base_start || task.no_bar || !gantt.isTaskVisible(task.id)) return;
     var pos = gantt.getTaskPosition(task, parse(task.base_start), parse(task.base_end));
     var bar = document.createElement("div");
     bar.className = "baseline-bar";
     // The same shade as the done part of a bar: the bar color under 30% black
-    if (task.color) bar.style.background = "color-mix(in srgb, " + task.color + " 70%, black)";
+    if (task.color) bar.style.backgroundColor = "color-mix(in srgb, " + task.color + " 70%, black)";
     bar.style.left = pos.left + "px";
     bar.style.width = Math.max(pos.width, 2) + "px";
     // pos.top is the top of the row and the bar is centered in it
@@ -3188,6 +3322,7 @@ gantt.addMarker({{ start_date: new Date(), css: "today-marker", text: "Today" }}
   gantt.attachEvent("onDataRender", function() {{ if (hoverId !== null) markRow(hoverId); }});
 }})();
 gantt.parse({{ data: {tasks_json}, links: {links_json} }});
+initComparePlan();
 buildMemberFilter();
 applyFilters();
 (function() {{
@@ -3430,7 +3565,7 @@ def run_gantt(config_path, history_dir=None, since=None):
     row_position = {key: i for i, key in enumerate(schedule_keys)}
     scheduled.sort(key=lambda s: row_position[s["key"]])
     print(f"Scheduled {len(scheduled)} stories.", file=sys.stderr)
-    changes = None
+    compare_date = None
     snapshots = []
     if history_dir:
         today = date.today()
@@ -3440,8 +3575,8 @@ def run_gantt(config_path, history_dir=None, since=None):
         if since:
             baseline = pick_baseline(snapshots, today, None if since == "last" else since)
             if baseline:
-                changes = compare_plans(baseline, current, config.holidays, today)
-                print(f"Comparing with the snapshot of {baseline['date']}.", file=sys.stderr)
+                compare_date = baseline["date"]
+                print(f"Comparing with the snapshot of {compare_date}.", file=sys.stderr)
             else:
                 print(f"No earlier snapshot in {history_dir}, so there are no changes to show.", file=sys.stderr)
         os.makedirs(history_dir, exist_ok=True)
@@ -3450,9 +3585,10 @@ def run_gantt(config_path, history_dir=None, since=None):
             json.dump(current, f, indent=1)
         print(f"Wrote {snapshot_path}", file=sys.stderr)
 
-    # Stories that left the plan come from an older snapshot, which may not have their issue type
-    if changes:
-        untyped = [r for r in changes["removed"] if not r.get("issue_type_icon_url")]
+    # Stories that left the plan come from older snapshots, which may not have their issue type
+    removed = removed_stories(snapshots, {s["key"] for s in scheduled}, date.today())
+    if removed:
+        untyped = [r for r in removed if not r.get("issue_type_icon_url")]
         if untyped:
             found = fetch_stories_by_keys([r["key"] for r in untyped], warn_missing=False)
             for r in untyped:
@@ -3492,8 +3628,7 @@ def run_gantt(config_path, history_dir=None, since=None):
     # Put the Jira issue type icons into the page, so it shows them without a Jira login
     epic_icon_url = find_epic_icon_url(story_data.values())
     icon_urls = [s["issue_type_icon_url"] for s in scheduled if s["issue_type_icon_url"]]
-    if changes:
-        icon_urls += [r["issue_type_icon_url"] for r in changes["removed"] if r.get("issue_type_icon_url")]
+    icon_urls += [r["issue_type_icon_url"] for r in removed if r.get("issue_type_icon_url")]
     if epic_icon_url:
         icon_urls.append(epic_icon_url)
     # The avatars of the spaces, for their header rows
@@ -3505,7 +3640,8 @@ def run_gantt(config_path, history_dir=None, since=None):
         icon_images = fetch_icon_images(icon_urls)
 
     write_gantt_html(scheduled, config.statuses, config.dependencies, config.holidays, config.status_colors,
-                     changes, snapshots, icon_images, epic_icon_url, epics_info, roadmap_epics, epic_order,
+                     compare_date, snapshots, removed, icon_images, epic_icon_url, epics_info, roadmap_epics,
+                     epic_order,
                      config.visuals, group_by_space=config.use_backlog_order and config.group_by_space,
                      keep_story_order=config.use_backlog_order)
 
@@ -3715,7 +3851,7 @@ def run_serve(config_path, history_dir, since, port, open_browser):
             self.wfile.write(body)
 
         def do_GET(self):
-            if self.path not in ("/", "/index.html"):
+            if urllib.parse.urlsplit(self.path).path not in ("/", "/index.html"):
                 self.send_text(404, "Not found")
             elif state["page"] is None:
                 self.send_text(503, "The chart is not ready. See the terminal for the error, "
@@ -3797,8 +3933,8 @@ def build_parser():
                               help="store a snapshot of the plan in DIR, and show the changes and the trend "
                                    "from the snapshots there")
     gantt_parser.add_argument("--since", metavar="YYYY-MM-DD", nargs="?", const="last", type=parse_since,
-                              help="show the changes since the latest snapshot on or before this date; "
-                                   "without a date, since the latest snapshot before the current day")
+                              help="compare with the latest snapshot on or before this date when the chart opens; "
+                                   "without a date, with the latest snapshot before the current day")
 
     serve_parser = subparsers.add_parser("serve", help="serve the Gantt chart on localhost, with a button to refresh it from Jira")
     serve_parser.add_argument("-c", "--config", metavar="FILE", default="gantt.toml",
@@ -3807,8 +3943,8 @@ def build_parser():
                               help="on each refresh, store a snapshot of the plan and the chart in DIR, and show "
                                    "the changes and the trend from the snapshots there")
     serve_parser.add_argument("--since", metavar="YYYY-MM-DD", nargs="?", const="last", type=parse_since,
-                              help="show the changes since the latest snapshot on or before this date; "
-                                   "without a date, since the latest snapshot before the current day")
+                              help="compare with the latest snapshot on or before this date when the chart opens; "
+                                   "without a date, with the latest snapshot before the current day")
     serve_parser.add_argument("--port", metavar="N", type=int, default=8000, help="port to listen on (default: 8000)")
     serve_parser.add_argument("--no-open", action="store_true", help="do not open the chart in the browser")
 

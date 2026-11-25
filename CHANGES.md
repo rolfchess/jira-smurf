@@ -4,6 +4,17 @@ The tool has no version numbers yet. This file lists the changes per week, newes
 
 ## Week of 2026-11-23
 
+- Compare the plan with any earlier plan from the **Compare with plan** list in the toolbar. A thin
+  striped line under each story, epic and space bar shows its dates in that plan, and the Moved
+  column, the `NEW` marks, the yellow outlines, the "No longer in the plan" group and the summary
+  follow your choice. The choice is kept in the address of the chart, as `?compare=YYYY-MM-DD`, so
+  a reload or a shared link shows the same comparison. `--since` now only picks the plan the chart
+  compares with when it opens, and the **Show changes since …** checkbox is gone: pick **none** in
+  the list instead.
+- Show for a story that is done since the compared plan how many working days earlier or later it
+  finished than planned, in the Moved column, and in its tooltip also the days it took against its
+  estimate. The line and the Moved value of an epic or space now use the same stories as its bar, so
+  with done stories hidden the line no longer starts at done work and looks like the plan moved later.
 - Mark the Fit All button while the chart is fitted. Before, Fit All marked the button of the scale
   it picked, such as Quarter, even though the chart was not in that scale.
 - Add the `group_by_space` setting. It is on by default, which keeps the header row per Jira space

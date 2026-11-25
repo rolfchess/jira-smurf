@@ -70,8 +70,8 @@ search_color = "#9c27b0"
 
 All `[visuals]` settings are optional. `past_due_blink` and `past_due_color` set the outline of a
 story or epic that ends after its due date: blinking and red by default. `behind_baseline_blink`
-and `behind_baseline_color` set the outline of a story that is behind the baseline: still and
-yellow by default. `search_color` is the color of the search box while it has text, and of the
+and `behind_baseline_color` set the outline of a story that should have finished by now in the
+compared plan: still and yellow by default. `search_color` is the color of the search box while it has text, and of the
 frame around the rows it finds: violet by default.
 
 ## Epic badges
