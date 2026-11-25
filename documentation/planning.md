@@ -32,6 +32,8 @@ or from Jira link types listed in `dependency_links`. Links to work outside the 
 - An unassigned story goes to the eligible member who can finish it first.
 - With `auto_assign = false`, unassigned work is scheduled sequentially under “Unassigned.”
 - A member who leaves before completing a story is skipped when another member can finish it.
+- A story assigned in Jira to someone with no working hours left in the plan, for example because
+  they left the team, is planned as an unassigned story, and the run prints a warning.
 - A done story keeps its Jira assignee and consumes no future capacity.
 
 Automatically assigned stories receive an `AUTO` badge in the chart.

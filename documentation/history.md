@@ -16,7 +16,8 @@ python jira_smurf.py gantt -o gantt.html --history plannings --since 2026-10-01
 ```
 
 When no snapshot exists on or before the requested date, the oldest snapshot is used. A warning
-identifies any date substitution.
+identifies any date substitution. Without `--since`, the chart shows no changes. The `serve` command
+takes the same `--history` and `--since` options.
 
 ## Reading changes
 

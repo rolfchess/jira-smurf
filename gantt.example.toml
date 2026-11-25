@@ -12,7 +12,7 @@ use_backlog_order = true        # use Jira backlog order instead of the order be
 group_by_space = true           # with use_backlog_order, put the epics under a row per Jira space
 dependency_links = ["Blocks"]   # Jira link types treated as dependencies
 auto_assign = true              # set false to put unassigned work under "Unassigned"
-exclude = []                    # omit project keys or issue keys, such as "DTICARCH" or "ACME-123"
+exclude = []                    # omit project keys or issue keys, such as "ARCH" or "ACME-123"
 
 # Days on which the whole team is unavailable, in YYYY-MM-DD format.
 holidays = [
@@ -85,7 +85,7 @@ auto_assign = false
 "Blocked" = "#ffcccc"
 
 [visuals]
-# Optional display settings. Omitted values use their defaults.
+# These display settings are optional. A setting that is left out uses its default.
 past_due_blink = true         # blink the outline of overdue stories and epics
 past_due_color = "#d62728"    # CSS color of the overdue outline; defaults to red
 behind_baseline_blink = false      # blink the outline of a story behind the baseline
@@ -94,7 +94,7 @@ search_color = "#9c27b0"           # CSS color of the search box and of the fram
 
 # Optional: add one [[badges]] table for each Jira field to mark on epics.
 # Field IDs vary by Jira site. Find the field under Jira settings → Issues → Custom fields.
-# An URL ending in id=10410 identifies customfield_10410. You can also use /rest/api/3/field.
+# A URL ending in id=10410 identifies customfield_10410. You can also use /rest/api/3/field.
 [[badges]]
 field = "customfield_10410"  # required Jira field ID
 label = "Paid"               # optional label; defaults to the field value
