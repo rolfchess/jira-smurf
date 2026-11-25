@@ -1785,7 +1785,8 @@ EPIC_COLORS = [
 
 def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=(), status_colors=None,
                      changes=None, snapshots=(), icon_images=None, epic_icon_url="",
-                     epics_info=None, roadmap_epics=(), epic_order=(), visuals=None, group_by_space=False):
+                     epics_info=None, roadmap_epics=(), epic_order=(), visuals=None, group_by_space=False,
+                     keep_story_order=False):
     """Write a self-contained HTML file with a DHTMLX Gantt chart.
 
     With changes (from compare_plans), the chart can mark what changed since the baseline.
@@ -1798,6 +1799,8 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     come after them.
     With group_by_space, the epics are put under a header row per Jira space, when they are in more
     than one space. epic_order must then list the epics of a space together.
+    With keep_story_order, the stories of an epic keep the order of scheduled_stories, such as the
+    Jira rank, instead of being sorted by start date. Done stories still come first.
     visuals is the [visuals] of the configuration, from parse_visuals.
     """
     # Assign colors to epics
@@ -1805,10 +1808,14 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     for s in scheduled_stories:
         if s["epic"] not in epics_seen:
             epics_seen.append(s["epic"])
-    # Sort: epic order, done stories first, then by start date
+    # Sort: epic order, done stories first, then by start date or in the given order
+    given_position = {id(s): i for i, s in enumerate(scheduled_stories)}
+
     def story_sort_key(s):
         epic_order = epics_seen.index(s["epic"])
         done = 0 if status_map.get(s["status"].lower(), 0) >= 1.0 else 1
+        if keep_story_order:
+            return (epic_order, done, given_position[id(s)])
         return (epic_order, done, s["start"], s["key"])
 
     sorted_stories = sorted(scheduled_stories, key=story_sort_key)
@@ -3336,7 +3343,7 @@ def run_gantt(config_path, history_dir=None, since=None):
             story_data[key]["_implementation_stretches"] = [
                 [start.isoformat(), end.isoformat() if end else ""] for start, end in stretches]
 
-    # The planner takes stories in this order; the story rows keep the order of the configuration file
+    # The planner takes stories in this order
     schedule_keys = ordered_keys
     if config.use_backlog_order and ordered_keys:
         print("Fetching the backlog order...", file=sys.stderr)
@@ -3344,8 +3351,9 @@ def run_gantt(config_path, history_dir=None, since=None):
         schedule_keys = sorted(ordered_keys, key=lambda key: positions.get(key, len(positions)))
 
     scheduled = schedule_stories(config, story_data, schedule_keys, done_dates)
-    config_position = {key: i for i, key in enumerate(ordered_keys)}
-    scheduled.sort(key=lambda s: config_position[s["key"]])
+    # The story rows follow the Jira rank with use_backlog_order, else the configuration file
+    row_position = {key: i for i, key in enumerate(schedule_keys)}
+    scheduled.sort(key=lambda s: row_position[s["key"]])
     print(f"Scheduled {len(scheduled)} stories.", file=sys.stderr)
     changes = None
     snapshots = []
@@ -3432,7 +3440,8 @@ def run_gantt(config_path, history_dir=None, since=None):
 
     write_gantt_html(scheduled, config.statuses, config.dependencies, config.holidays, config.status_colors,
                      changes, snapshots, icon_images, epic_icon_url, epics_info, roadmap_epics, epic_order,
-                     config.visuals, group_by_space=config.use_backlog_order)
+                     config.visuals, group_by_space=config.use_backlog_order,
+                     keep_story_order=config.use_backlog_order)
 
 
 def run_velocity(config_path, weeks):
