@@ -2,8 +2,8 @@
 
 The chart supports zooming, searching, and filtering by team member. Select several members—or
 “Unassigned”—to combine their work. Done stories are hidden initially; use the toolbar to show them.
-The Story-column buttons collapse or expand every epic. Click an epic in the Story column to
-collapse or expand only that epic.
+The Story-column buttons collapse or expand every epic; the space rows stay open. Click an epic or
+a space in the Story column to collapse or expand only that one.
 
 The Day, Week, Month and Quarter buttons set the scale of the chart. A filter then keeps that scale
 and the dates in view. Scroll to see stories outside them. Until you pick a scale, a filter fits the
@@ -24,6 +24,9 @@ login; an emoji is used when an icon cannot be downloaded.
 - Due dates appear as red diamonds. Unfinished work ending after its due date gets the configured
   overdue outline.
 - Epic rows show the total points of their visible stories.
+- With `use_backlog_order`, and epics in more than one Jira space, each space has a header row with
+  its name and avatar above its epics. The row shows the total points of its visible stories, and a
+  thin grey line in the timeline from the first start to the last end of its epics.
 - Weekends and holidays are shaded in day view.
 - Colors remain when printing or saving as PDF.
 

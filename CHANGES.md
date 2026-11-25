@@ -4,6 +4,17 @@ The tool has no version numbers yet. This file lists the changes per week, newes
 
 ## Week of 2026-11-23
 
+- Plan an open story that has not started yet no earlier than its Start date in Jira, or, without
+  one, the Start date of its epic. Before, the Start date was only used for epics without stories.
+  The tooltip of a story or epic shows its Start date from Jira.
+- List the stories of an epic in Jira rank order with `use_backlog_order`, with the done stories
+  first. Before, they were sorted by start date, so a story that starts earlier, for example
+  because auto-assign gave it to someone who is free sooner, came above stories ranked higher.
+- List the epics by the name of their Jira space first, then by Jira rank, with `use_backlog_order`.
+  Before, the epics of all spaces were mixed in one rank order.
+- Show a header row per Jira space above its epics, with `use_backlog_order` and epics in more than
+  one space. The row shows the space name and avatar, the total points of its visible stories, and a
+  thin line in the timeline over the dates of its epics. Collapse all keeps the space rows open.
 - Keep the vertical line under the mouse in the Gantt chart after you scroll the timeline. In the Day
   and Week views, it moved away from the mouse by the distance you had scrolled.
 - Leave 300 pixels of room after the last bar of the timeline, in every scale. The text next to the
