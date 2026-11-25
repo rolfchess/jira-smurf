@@ -1650,11 +1650,12 @@ def changes_summary_html(changes):
 </div>"""
 
 
-def trend_html(snapshots, epic_color_map, holidays, compare_date=None):
+def trend_html(snapshots, epic_color_map, holidays, compare_date=None, epic_spaces=None):
     """Return the HTML of a milestone trend chart: the planned end of each epic at each run.
 
     The table below the chart compares the latest run with the run of compare_date, or with
-    the oldest run if compare_date is None.
+    the oldest run if compare_date is None. With epic_spaces, {epic name: Jira space name}, the
+    table has a header row above the epics of each space.
 
     The x axis is the run date and the y axis the planned end date. A flat line means the
     end date did not move. Only epics in epic_color_map are drawn, in their epic color.
@@ -1741,8 +1742,8 @@ def trend_html(snapshots, epic_color_map, holidays, compare_date=None):
     )
 
     compare_run = date.fromisoformat(compare_date) if compare_date else runs[0]
-    rows = []
-    for name, points in list(series.items()) + [("Whole plan", whole_plan)]:
+
+    def table_row(name, points, css_class=""):
         then, last = dict(points).get(compare_run), points[-1][1]
         if then is None:
             then_cell = moved_cell = "–"
@@ -1750,8 +1751,20 @@ def trend_html(snapshots, epic_color_map, holidays, compare_date=None):
             moved = working_days_between(then + timedelta(days=1), last + timedelta(days=1), holidays)
             then_cell = then.isoformat()
             moved_cell = format_signed(moved, " working days") if moved else "no change"
-        rows.append(f"<tr><td>{html.escape(name)}</td><td>{then_cell}</td>"
-                    f"<td>{last}</td><td>{moved_cell}</td></tr>")
+        row_class = f' class="{css_class}"' if css_class else ""
+        return (f"<tr{row_class}><td>{html.escape(name)}</td><td>{then_cell}</td>"
+                f"<td>{last}</td><td>{moved_cell}</td></tr>")
+
+    rows = []
+    current_space = None
+    for name, points in series.items():
+        space = (epic_spaces or {}).get(name, "")
+        # An epic without a space after a space group gets its own header, so it does not look part of that group
+        if epic_spaces and space != current_space and (space or current_space):
+            rows.append(f'<tr class="space-row"><th colspan="4">{html.escape(space or "No space")}</th></tr>')
+        current_space = space
+        rows.append(table_row(name, points))
+    rows.append(table_row("Whole plan", whole_plan, "whole-plan-row"))
     table = ("<details><summary>Show as table</summary><table><tr><th>Epic</th>"
              f"<th>Planned end {compare_run}</th>"
              "<th>Latest planned end</th><th>Moved</th></tr>" + "".join(rows) + "</table></details>")
@@ -1899,6 +1912,9 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
 
     spaces = {row_space(kind, row).get("space", "") for kind, row in epic_rows if row != NO_EPIC} - {""}
     use_spaces = group_by_space and len(spaces) > 1
+    # {epic row name: space name} for the table of the trend chart
+    epic_spaces = {(row if kind == "stories" else row["name"]): row_space(kind, row).get("space", "")
+                   for kind, row in epic_rows if row != NO_EPIC} if use_spaces else None
     space_task_ids = {}  # {space name: task id}
     epic_parents = {}    # {epic task id: space task id}
 
@@ -2145,7 +2161,8 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
         changes_toggle = ""
         moved_column = ""
     summary_html = changes_summary_html(changes) if changes else ""
-    trend = trend_html(list(snapshots), epic_color_map, set(holidays), changes["since"] if changes else None)
+    trend = trend_html(list(snapshots), epic_color_map, set(holidays), changes["since"] if changes else None,
+                       epic_spaces)
 
     # The outline of a story or epic that ends after its due date, blinking or not
     visuals = visuals or DEFAULT_VISUALS
@@ -2370,6 +2387,11 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   .trend-help {{ font-size: 13px; color: #555; margin: 0; }}
   #trend table {{ border-collapse: collapse; margin-top: 6px; }}
   #trend th, #trend td {{ border: 1px solid #ddd; padding: 4px 10px; text-align: left; }}
+  /* The colors of the space rows of the chart */
+  #trend tr.space-row th {{
+    background: #dde4ec; color: #34495e; font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px;
+  }}
+  #trend tr.whole-plan-row td {{ font-weight: 700; }}
   .type-icon {{ margin-right: 5px; }}
   img.type-icon {{ width: 16px; height: 16px; vertical-align: -3px; }}
   .tree-buttons {{ margin-left: 12px; }}

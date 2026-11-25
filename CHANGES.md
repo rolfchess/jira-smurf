@@ -11,6 +11,8 @@ The tool has no version numbers yet. This file lists the changes per week, newes
 - Update the documentation: weekend hours, unknown statuses, badge colors and stripes, assignees
   without hours left, the mouse line, the search count, the refresh error, and the missing support
   for Jira Server and Data Center.
+- Add the space header rows of the chart to the table under the trend chart, and show the row for
+  the whole plan in bold.
 - Plan an open story that has not started yet no earlier than its Start date in Jira, or, without
   one, the Start date of its epic. Before, the Start date was only used for epics without stories.
   The tooltip of a story or epic shows its Start date from Jira.
