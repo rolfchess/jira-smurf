@@ -13,6 +13,7 @@ The `gantt`, `serve`, and `velocity` commands read `gantt.toml` by default. Star
 | `include_open_sprints`   | Include every story in the active sprint                                               |
 | `include_future_sprints` | Include every story in future sprints                                                  |
 | `use_backlog_order`      | Use Jira backlog order instead of configuration order                                  |
+| `group_by_space`         | With `use_backlog_order`, group the epics under a row per Jira space; defaults to `true` |
 | `work_starts_at`         | Status at which work starts, such as `"In Progress"`                                   |
 | `implementation_status`  | Optional status used for implementation-time badges                                    |
 | `dependency_links`       | Jira link types treated as dependencies; defaults to `["Blocks"]`; use `[]` to disable |
@@ -23,7 +24,8 @@ The `gantt`, `serve`, and `velocity` commands read `gantt.toml` by default. Star
 ## Team availability
 
 Create one `[team."Display Name"]` table per member. The name must match Jira. Set working hours
-with `mon` through `fri`.
+with `mon` through `sun`. A day that is left out has no working hours, so a normal week only needs
+`mon` through `fri`.
 
 ```toml
 [team."Alice Baker"]
@@ -45,7 +47,8 @@ auto_assign = false
 
 ## Statuses, colors, and visuals
 
-Map every relevant Jira status to progress from 0 to 100. A story at 100 is done.
+Map every relevant Jira status to progress from 0 to 100. A story at 100 is done. A status that
+is missing from `[statuses]` counts as 0, and the run prints a warning that names it.
 
 ```toml
 [statuses]
@@ -84,9 +87,11 @@ stripe = true
 values = ["Yes", "Partly"]
 ```
 
-Only `field` is required. Without `label`, the badge displays the field value. Without `values`, any
-value except “No”, “False”, or zero matches. Cascading selects appear as `Parent > Child`; the
-parent also matches `values`.
+Only `field` is required. Without `label`, the badge displays the field value. `color` is a CSS
+color, amber by default, and `stripe = true` also draws a stripe in that color on the left of the
+epic row. Without `values`, any value except “No”, “False”, or zero matches. With `values`, upper
+and lower case do not matter. Cascading selects appear as `Parent > Child`; the parent also matches
+`values`.
 
 Find a custom field ID in its Jira settings URL (`id=10410` means `customfield_10410`) or through
 Jira's `/rest/api/3/field` endpoint.

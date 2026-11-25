@@ -45,6 +45,7 @@ python jira_smurf.py gantt -o gantt.html
 python jira_smurf.py gantt -c other.toml -o gantt.html
 python jira_smurf.py serve --history plannings
 python jira_smurf.py serve --port 8080 --no-open
+python jira_smurf.py serve --history plannings --since
 
 # Compare plans
 python jira_smurf.py gantt -o gantt.html --history plannings --since
@@ -56,7 +57,7 @@ python jira_smurf.py velocity --weeks 4
 ```
 
 Run `python jira_smurf.py --help` or add `--help` after a command for all options. Progress is
-written to standard error, so it does not contaminate exported output.
+written to standard error, so it does not end up in the exported output.
 
 ## Convenience script
 
