@@ -7,8 +7,17 @@ replaces that day's snapshot.
 python jira_smurf.py gantt -o gantt.html --history plannings
 ```
 
-Add `--since` to compare with the latest snapshot before today, or provide a date to use the latest
-snapshot on or before it:
+## Comparing with an earlier plan
+
+With snapshots from before today, the toolbar has a **Compare with plan** list with every earlier
+snapshot, newest first. Pick one to see how the current plan moved since then; pick **none** to
+hide the comparison. The chart keeps your choice in its address, as `?compare=2026-11-18` or
+`?compare=none`, so a reload, a refresh from Jira, or a link you share shows the same comparison.
+A date without a snapshot uses the latest snapshot before it.
+
+Without `compare` in the address, the chart shows no comparison. Add `--since` to compare with
+the latest snapshot before today at first, or provide a date to use the latest snapshot on or
+before it:
 
 ```bash
 python jira_smurf.py gantt -o gantt.html --history plannings --since
@@ -20,15 +29,22 @@ identifies any date substitution.
 
 ## Reading changes
 
-The chart's **Show changes since …** checkbox controls comparison marks:
+While a plan is compared:
 
+- a thin striped line under each bar shows its dates in that plan, in the dark shade of the bar
+  color. Stories, epics and space rows have one; the tooltip gives the dates and how many working
+  days the end moved;
 - yellow rows and `NEW` identify new stories;
 - tooltips show estimate changes;
-- thin bars show baseline dates, in the dark shade of the bar color;
-- the Moved column shows the change in working days;
+- the Moved column shows the change in working days. For a story that was open in that plan and is
+  done now, it shows how much earlier or later it finished than planned; its tooltip also compares
+  the working days it took with its estimate;
+- the line of an epic or space covers the same stories as its bar: with done stories hidden, only
+  its open stories;
 - yellow outlines identify work that should already have finished (set the color and the blinking
   with `behind_baseline_color` and `behind_baseline_blink` in `[visuals]`);
-- a final gray group lists open stories removed from the current plan.
+- a final gray group lists the stories that were open in that plan and are no longer in the current
+  plan, with their dates and status in that plan.
 
 The summary below the chart attributes changes in the plan end to new stories, changed estimates,
 removed work, and late stories.
