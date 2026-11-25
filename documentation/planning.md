@@ -18,7 +18,8 @@ Work is grouped before it is ordered:
 Within those groups, the default order is configured epics, individual stories, then sprint stories.
 With `use_backlog_order = true`, Jira rank determines story order, both for planning and for the
 order of the stories within an epic in the chart. Epics are listed by the name of their
-Jira space first, and by Jira rank within each space.
+Jira space first, and by Jira rank within each space. With `group_by_space = false`, the epics are
+listed by Jira rank only, without a header row per space.
 
 A dependency must finish before the dependent story starts. Dependencies can come from `depends_on`
 or from Jira link types listed in `dependency_links`. Links to work outside the plan are ignored.
@@ -31,6 +32,8 @@ or from Jira link types listed in `dependency_links`. Links to work outside the 
 - An unassigned story goes to the eligible member who can finish it first.
 - With `auto_assign = false`, unassigned work is scheduled sequentially under “Unassigned.”
 - A member who leaves before completing a story is skipped when another member can finish it.
+- A story assigned in Jira to someone with no working hours left in the plan, for example because
+  they left the team, is planned as an unassigned story, and the run prints a warning.
 - A done story keeps its Jira assignee and consumes no future capacity.
 
 Automatically assigned stories receive an `AUTO` badge in the chart.

@@ -16,7 +16,8 @@ python jira_smurf.py gantt -o gantt.html --history plannings --since 2026-10-01
 ```
 
 When no snapshot exists on or before the requested date, the oldest snapshot is used. A warning
-identifies any date substitution.
+identifies any date substitution. Without `--since`, the chart shows no changes. The `serve` command
+takes the same `--history` and `--since` options.
 
 ## Reading changes
 
@@ -34,4 +35,6 @@ The summary below the chart attributes changes in the plan end to new stories, c
 removed work, and late stories.
 
 With at least two snapshots, the trend chart plots each epic's planned end at every run. A rising
-line means the expected end moved later.
+line means the expected end moved later. Under the chart, **Show as table** lists the same epics with
+their planned end at the baseline and now. When the chart groups the epics by Jira space, the table
+has the same space header rows, and the last row, for the whole plan, is in bold.
