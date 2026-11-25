@@ -4,6 +4,8 @@ The tool has no version numbers yet. This file lists the changes per week, newes
 
 ## Week of 2026-11-23
 
+- Mark the Fit All button while the chart is fitted. Before, Fit All marked the button of the scale
+  it picked, such as Quarter, even though the chart was not in that scale.
 - Plan an open story that has not started yet no earlier than its Start date in Jira, or, without
   one, the Start date of its epic. Before, the Start date was only used for epics without stories.
   The tooltip of a story or epic shows its Start date from Jira.

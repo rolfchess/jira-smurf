@@ -2591,8 +2591,10 @@ function setAllOpen(open) {{
 function setZoom(level) {{
   gantt.ext.zoom.setLevel(level);
   makeLabelRoom(false);
+  // Fit All picks a level itself, but its own button is the one to mark
+  var active = chosenZoom || "fit all";
   document.querySelectorAll("#toolbar button").forEach(function(b) {{
-    b.classList.toggle("active", b.textContent.toLowerCase() === level);
+    b.classList.toggle("active", b.textContent.toLowerCase() === active);
   }});
 }}
 var LABEL_ROOM = 300;  // pixels after the last bar, for the text next to it such as the assignee and the end date
