@@ -24,8 +24,8 @@ login; an emoji is used when an icon cannot be downloaded.
 - Due dates appear as red diamonds. Unfinished work ending after its due date gets the configured
   overdue outline.
 - Epic rows show the total points of their visible stories.
-- With `use_backlog_order`, and epics in more than one Jira space, each space has a header row with
-  its name and avatar above its epics. The row shows the total points of its visible stories, and a
+- With `use_backlog_order` and `group_by_space`, the default, and epics in more than one Jira space,
+  each space has a header row with its name and avatar above its epics. The row shows the total points of its visible stories, and a
   thin grey line in the timeline from the first start to the last end of its epics.
 - Weekends and holidays are shaded in day view.
 - Colors remain when printing or saving as PDF.

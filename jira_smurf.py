@@ -203,6 +203,7 @@ class GanttConfig:
     status_colors: dict  # {lowercase_name: css_color}
     work_start_progress: float  # progress of the status where work on a story starts, 0 if not set
     use_backlog_order: bool  # schedule stories in Jira backlog order instead of the order of the configuration file
+    group_by_space: bool  # with use_backlog_order, put the epics under a header row per Jira space
     dependency_links: list  # lowercase names of Jira link types that make a story wait for another
     auto_assign: bool  # give stories without a team member to the team; if False, plan them under "Unassigned"
     implementation_status: str  # status where open stories show their days of work in a badge, "" if not set
@@ -399,6 +400,7 @@ def load_gantt_config(path="gantt.toml"):
     include_open_sprints = raw.get("include_open_sprints", False)
     include_future_sprints = raw.get("include_future_sprints", False)
     use_backlog_order = raw.get("use_backlog_order", False)
+    group_by_space = raw.get("group_by_space", True)
     dependency_links = raw.get("dependency_links", ["Blocks"])
     if not isinstance(dependency_links, list) or not all(isinstance(name, str) for name in dependency_links):
         print(f"Error: 'dependency_links' must be a list of Jira link type names, got {dependency_links!r}",
@@ -406,7 +408,8 @@ def load_gantt_config(path="gantt.toml"):
         sys.exit(1)
     for name, val in (("include_open_sprints", include_open_sprints),
                       ("include_future_sprints", include_future_sprints),
-                      ("use_backlog_order", use_backlog_order)):
+                      ("use_backlog_order", use_backlog_order),
+                      ("group_by_space", group_by_space)):
         if not isinstance(val, bool):
             print(f"Error: '{name}' must be true or false, got {val!r}", file=sys.stderr)
             sys.exit(1)
@@ -435,6 +438,7 @@ def load_gantt_config(path="gantt.toml"):
                        status_colors=status_colors,
                        work_start_progress=work_start_progress,
                        use_backlog_order=use_backlog_order,
+                       group_by_space=group_by_space,
                        dependency_links=[name.lower() for name in dependency_links],
                        auto_assign=auto_assign_team,
                        implementation_status=implementation_status or "",
@@ -3448,16 +3452,19 @@ def run_gantt(config_path, history_dir=None, since=None):
         print(f"  Epic {key} has no stories yet, showing its dates from Jira", file=sys.stderr)
         roadmap_epics.append(info)
 
-    # The epic rows follow the configuration file, or with use_backlog_order the name of the Jira space
-    # of the epics and then their Jira rank
+    # The epic rows follow the configuration file, or with use_backlog_order their Jira rank. With
+    # group_by_space, they are sorted by the name of their Jira space first, so each space has its epics together.
     epic_order = list(config.epics)
     if config.use_backlog_order and epic_keys:
         print("Fetching the rank of the epics...", file=sys.stderr)
         epic_positions = fetch_backlog_order(epic_keys)
 
         def epic_sort_key(key):
+            rank = epic_positions.get(key, len(epic_positions))
+            if not config.group_by_space:
+                return rank
             space = epics_info.get(key, {}).get("space", "")
-            return (space == "", space.lower(), epic_positions.get(key, len(epic_positions)))
+            return (space == "", space.lower(), rank)
         epic_order = sorted(epic_keys, key=epic_sort_key)
 
     # Put the Jira issue type icons into the page, so it shows them without a Jira login
@@ -3468,7 +3475,7 @@ def run_gantt(config_path, history_dir=None, since=None):
     if epic_icon_url:
         icon_urls.append(epic_icon_url)
     # The avatars of the spaces, for their header rows
-    if config.use_backlog_order:
+    if config.use_backlog_order and config.group_by_space:
         icon_urls += [info["space_avatar"] for info in epics_info.values() if info.get("space_avatar")]
     icon_images = {}
     if icon_urls:
@@ -3477,7 +3484,7 @@ def run_gantt(config_path, history_dir=None, since=None):
 
     write_gantt_html(scheduled, config.statuses, config.dependencies, config.holidays, config.status_colors,
                      changes, snapshots, icon_images, epic_icon_url, epics_info, roadmap_epics, epic_order,
-                     config.visuals, group_by_space=config.use_backlog_order,
+                     config.visuals, group_by_space=config.use_backlog_order and config.group_by_space,
                      keep_story_order=config.use_backlog_order)
 
 

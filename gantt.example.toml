@@ -9,6 +9,7 @@ include_future_sprints = false  # include every story in future sprints
 work_starts_at = "In Progress"  # start completed work at this status or a later one
 implementation_status = "Implementation"  # track time spent at this status or later
 use_backlog_order = true        # use Jira backlog order instead of the order below
+group_by_space = true           # with use_backlog_order, put the epics under a row per Jira space
 dependency_links = ["Blocks"]   # Jira link types treated as dependencies
 auto_assign = true              # set false to put unassigned work under "Unassigned"
 exclude = []                    # omit project keys or issue keys, such as "DTICARCH" or "ACME-123"

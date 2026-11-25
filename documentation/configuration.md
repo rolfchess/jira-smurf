@@ -13,6 +13,7 @@ The `gantt`, `serve`, and `velocity` commands read `gantt.toml` by default. Star
 | `include_open_sprints`   | Include every story in the active sprint                                               |
 | `include_future_sprints` | Include every story in future sprints                                                  |
 | `use_backlog_order`      | Use Jira backlog order instead of configuration order                                  |
+| `group_by_space`         | With `use_backlog_order`, group the epics under a row per Jira space; defaults to `true` |
 | `work_starts_at`         | Status at which work starts, such as `"In Progress"`                                   |
 | `implementation_status`  | Optional status used for implementation-time badges                                    |
 | `dependency_links`       | Jira link types treated as dependencies; defaults to `["Blocks"]`; use `[]` to disable |

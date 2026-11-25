@@ -6,6 +6,8 @@ The tool has no version numbers yet. This file lists the changes per week, newes
 
 - Mark the Fit All button while the chart is fitted. Before, Fit All marked the button of the scale
   it picked, such as Quarter, even though the chart was not in that scale.
+- Add the `group_by_space` setting. It is on by default, which keeps the header row per Jira space
+  with `use_backlog_order`. With `group_by_space = false`, the epics are listed by Jira rank only.
 - Plan an open story that has not started yet no earlier than its Start date in Jira, or, without
   one, the Start date of its epic. Before, the Start date was only used for epics without stories.
   The tooltip of a story or epic shows its Start date from Jira.
