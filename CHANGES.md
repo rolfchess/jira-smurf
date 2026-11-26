@@ -33,6 +33,7 @@ The tool has no version numbers yet. This file lists what changed each week, new
 - The vertical line under the mouse stays under the mouse after you scroll the Day or Week view.
 - Fit All marks its own button, not the button of the scale it picked.
 - With done stories hidden, the plan of an epic no longer looks later than it is.
+- An epic without stories no longer makes its space look much later in the Moved column.
 
 ## Week of 2026-11-16
 

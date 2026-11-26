@@ -2640,12 +2640,16 @@ function compareGroups() {{
     delete task.base_start;
     delete task.base_end;
     delete task.moved_days;
+    var end = null;
     children.forEach(function(child) {{
-      if (!child.base_start || !isShown(child)) return;
+      // An epic without stories is not planned and is not in a stored plan, so it counts in neither end
+      if (!isShown(child) || child.roadmap) return;
+      if (!end || child.end_date > end) end = child.end_date;
+      if (!child.base_start) return;
       if (!task.base_start || child.base_start < task.base_start) task.base_start = child.base_start;
       if (!task.base_end || child.base_end > task.base_end) task.base_end = child.base_end;
     }});
-    if (task.base_end) task.moved_days = workingDaysBetween(parse(task.base_end), task.end_date);
+    if (task.base_end && end) task.moved_days = workingDaysBetween(parse(task.base_end), end);
   }}
   function children(task) {{
     return gantt.getChildren(task.id).map(function(id) {{ return gantt.getTask(id); }});
