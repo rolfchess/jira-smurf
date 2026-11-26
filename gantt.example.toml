@@ -92,7 +92,7 @@ behind_baseline_blink = false      # blink the outline of a story behind the bas
 behind_baseline_color = "#f2c200"  # CSS color of the outline of a story behind the baseline; defaults to yellow
 search_color = "#9c27b0"           # CSS color of the search box and of the frame around the rows it finds; defaults to violet
 days_off_bar_from = 5              # days off in a row are one bar from this many working days on; defaults to 5
-holiday_icon = "flag"              # "flag" for a red flag on holidays in the date header, or "none"
+holiday_icon = "flag"              # the mark of holidays in the date header: "flag", "star", "calendar", "dot", "text" or "none"
 enable_vacation_banners = true     # false shows no marks or bars for days off in the date header
 
 # Optional: add one [[badges]] table for each Jira field to mark on epics.

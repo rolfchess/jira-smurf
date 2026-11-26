@@ -33,15 +33,16 @@ login; an emoji is used when an icon cannot be downloaded.
 - Weekends and holidays are shaded in day and week view, in the timeline and in the date header.
 - The date header marks holidays and days off. In day and week view a holiday has a red flag, and a
   team member who is off has a round mark with their initials, in their color. Several members off
-  on one day overlap, with at most three marks and then `+N`. An absence of five working days or more
-  is one bar in the member's color across all its days, with the initials on its first day and on
-  each Monday. You can change that number of days with `days_off_bar_from` in `[visuals]`. In month
-  and quarter view each week or month shows a flag, with the number of holidays when there are
+  on one day overlap, with at most three marks and then `+N`. An absence of five working days or
+  more is one bar in the member's color across all its days, with the initials on its first day and
+  on each Monday. You can change that number of days with `days_off_bar_from` in `[visuals]`. In
+  month and quarter view each week or month shows a flag, with the number of holidays when there are
   more, and the marks of the members who are off in it. Hover over a mark or bar to see the names
-  and dates. When you select team members with the name buttons above the chart, only their days
-  off are marked. A day off outside the member's `in_team` periods is not marked, because the member
-  has no work planned on that day. Turn off the flags with `holiday_icon = "none"`, and the marks
-  and bars of days off with `enable_vacation_banners = false`, both in `[visuals]`.
+  and dates. When you select team members with the name buttons above the chart, only their days off
+  are marked. A day off outside the member's `in_team` periods is not marked, because the member has
+  no work planned on that day. Choose another mark for holidays, or none, with `holiday_icon`, and
+  turn off the marks and bars of days off with `enable_vacation_banners = false`, both in
+  `[visuals]`.
 - Colors remain when printing or saving as PDF.
 
 The Sprint column shows a story's latest sprint number. The Status column shows its current Jira

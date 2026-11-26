@@ -512,7 +512,7 @@ def parse_badges(badges_raw, path):
 DEFAULT_VISUALS = {"past_due_blink": True, "past_due_color": "#d62728",
                    "behind_baseline_blink": False, "behind_baseline_color": "#f2c200", "search_color": "#9c27b0",
                    "days_off_bar_from": 5, "holiday_icon": "flag", "enable_vacation_banners": True}
-HOLIDAY_ICONS = ("flag", "none")
+HOLIDAY_ICONS = ("flag", "star", "calendar", "dot", "text", "none")
 
 
 def parse_visuals(visuals_raw, path):
@@ -2341,6 +2341,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   .marked-marks {{ display: flex; justify-content: center; align-items: center; height: 16px; }}
   .holiday-flag {{ color: #c62828; }}
   .holiday-count {{ font-size: 10px; color: #c62828; font-weight: 600; margin: 0 3px 0 1px; }}
+  .holiday-text {{ font-size: 9px; font-weight: 700; letter-spacing: 0.3px; line-height: 13px; }}
   .off-avatar {{ display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px;
     border-radius: 50%; border: 1px solid #fff; box-sizing: border-box; color: #fff; font-size: 8px;
     font-weight: 700; letter-spacing: -0.2px; text-transform: none; line-height: 1; }}
@@ -2806,7 +2807,7 @@ gantt.config.show_progress = true;
 // team members who are off in it. Only the team members that the Team member filter shows are marked.
 var holidayDays = new Set({holidays_json});
 var daysOff = {days_off_json};
-var HOLIDAY_ICON = {holiday_icon_json};  // "flag", or "none" for no mark on a holiday in the date header
+var HOLIDAY_ICON = {holiday_icon_json};  // the mark of a holiday in the date header, or "none"
 var offByDay = {{}};  // {{"YYYY-MM-DD": [{{member, run}}]}} for the days off of short absences
 var barLanes = 0;
 daysOff.forEach(function(member) {{
@@ -2824,9 +2825,21 @@ var MAX_AVATARS = 3;
 var isoDay = gantt.date.date_to_str("%Y-%m-%d");
 var shortDay = gantt.date.date_to_str("%d %M");
 var parseDay = gantt.date.str_to_date("%Y-%m-%d");
-var FLAG_SVG = "<svg class='holiday-flag' viewBox='0 0 12 14' width='11' height='13' aria-hidden='true'>" +
-  "<path d='M1.5 1v12' stroke='currentColor' stroke-width='1.5' stroke-linecap='round'/>" +
-  "<path d='M2.5 1.5h8l-2 3 2 3h-8z' fill='currentColor'/></svg>";
+var HOLIDAY_MARKS = {{
+  flag: "<svg class='holiday-flag' viewBox='0 0 12 14' width='11' height='13' aria-hidden='true'>" +
+    "<path d='M1.5 1v12' stroke='currentColor' stroke-width='1.5' stroke-linecap='round'/>" +
+    "<path d='M2.5 1.5h8l-2 3 2 3h-8z' fill='currentColor'/></svg>",
+  star: "<svg class='holiday-flag' viewBox='0 0 14 14' width='12' height='12' aria-hidden='true'>" +
+    "<path d='M7 1l1.8 3.9 4.2.5-3.1 2.9.8 4.2L7 10.4l-3.7 2.1.8-4.2L1 5.4l4.2-.5z' fill='currentColor'/></svg>",
+  calendar: "<svg class='holiday-flag' viewBox='0 0 12 13' width='11' height='12' aria-hidden='true'>" +
+    "<rect x='0.75' y='1.75' width='10.5' height='10.5' rx='1.5' fill='#fff' stroke='currentColor' stroke-width='1.5'/>" +
+    "<rect x='0.75' y='1.75' width='10.5' height='3' fill='currentColor'/>" +
+    "<rect x='4.5' y='7' width='3' height='3' fill='currentColor'/></svg>",
+  dot: "<svg class='holiday-flag' viewBox='0 0 10 10' width='8' height='8' aria-hidden='true'>" +
+    "<circle cx='5' cy='5' r='4' fill='currentColor'/></svg>",
+  text: "<span class='holiday-flag holiday-text'>HOL</span>"
+}};
+var HOLIDAY_MARK = HOLIDAY_MARKS[HOLIDAY_ICON] || "";
 function escapeText(text) {{
   return String(text).replace(/[&<>"']/g, function(c) {{
     return {{"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}}[c];
@@ -2885,8 +2898,8 @@ function dayCell(format) {{
     var key = isoDay(date);
     var marks = "", tip = "";
     if (holidayDays.has(key) && !isWeekend(date)) {{
-      if (HOLIDAY_ICON === "flag") {{
-        marks = FLAG_SVG;
+      if (HOLIDAY_ICON !== "none") {{
+        marks = HOLIDAY_MARK;
         tip = "Holiday";
       }}
     }} else {{
@@ -2922,8 +2935,8 @@ function summaryCell(format, unit) {{
     }});
     var members = daysOff.filter(function(member) {{ return offDays[member.name]; }});
     var marks = "", tips = [];
-    if (holidays.length && HOLIDAY_ICON === "flag") {{
-      marks += FLAG_SVG + (holidays.length > 1 ? "<span class='holiday-count'>" + holidays.length + "</span>" : "");
+    if (holidays.length && HOLIDAY_ICON !== "none") {{
+      marks += HOLIDAY_MARK + (holidays.length > 1 ? "<span class='holiday-count'>" + holidays.length + "</span>" : "");
       tips.push((holidays.length > 1 ? "Holidays: " : "Holiday: ") + holidays.join(", "));
     }}
     marks += avatarStack(members);

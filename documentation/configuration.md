@@ -74,16 +74,17 @@ enable_vacation_banners = true
 ```
 
 All `[visuals]` settings are optional. `past_due_blink` and `past_due_color` set the outline of a
-story or epic that ends after its due date: blinking and red by default. `behind_baseline_blink`
-and `behind_baseline_color` set the outline of a story that should have finished by now in the
-compared plan: still and yellow by default. `search_color` is the color of the search box while it
-has text, and of the frame around the rows it finds: violet by default. `days_off_bar_from` is the
-number of working days off in a row from which an absence is one bar in the date header, instead of
-a mark on each day: 5 by default. With 1, every day off is a bar. `holiday_icon` is `"flag"`, the
-default, for a red flag on each holiday in the date header, or `"none"` for no mark. Holidays stay
-grey in the chart either way. With `enable_vacation_banners = false`, the date header shows no marks
-or bars for days off; the planning still uses the days off. When the date header has nothing left to
-mark, it is lower.
+story or epic that ends after its due date: blinking and red by default. `behind_baseline_blink` and
+`behind_baseline_color` set the outline of a story that should have finished by now in the compared
+plan: still and yellow by default. `search_color` is the color of the search box while it has text,
+and of the frame around the rows it finds: violet by default. `days_off_bar_from` is the number of
+working days off in a row from which an absence is one bar in the date header, instead of a mark on
+each day: 5 by default. With 1, every day off is a bar. `holiday_icon` sets the red mark on each
+holiday in the date header: `"flag"`, the default, `"star"`, `"calendar"` for a small calendar page,
+`"dot"`, `"text"` for the letters HOL, or `"none"` for no mark. Holidays stay grey in the chart
+either way. With `enable_vacation_banners = false`, the date header shows no marks or bars for days
+off; the planning still uses the days off. When the date header has nothing left to mark, it is
+lower.
 
 ## Epic badges
 
