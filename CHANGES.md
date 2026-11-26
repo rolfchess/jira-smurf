@@ -4,6 +4,11 @@ The tool has no version numbers yet. This file lists the changes per week, newes
 
 ## Week of 2026-11-23
 
+- Mark holidays and days off in the date header of the chart. A holiday has a red flag, and a team
+  member who is off has a round mark with their initials in their own color. Several members off on one day overlap, up to three and then
+  `+N`, and an absence of five working days or more is one bar across its days. In month and quarter
+  view each week or month sums them up. Hover over a mark for the names and dates. The marks follow
+  the **Team member** filter.
 - Compare the plan with any earlier plan from the **Compare with plan** list in the toolbar. A thin
   striped line under each story, epic and space bar shows its dates in that plan, and the Moved
   column, the `NEW` marks, the yellow outlines, the "No longer in the plan" group and the summary

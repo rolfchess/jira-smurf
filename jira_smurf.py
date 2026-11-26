@@ -327,6 +327,7 @@ def load_gantt_config(path="gantt.toml"):
             print(f"Error: 'auto_assign' for team member '{name}' must be true or false, got {auto_assign!r}", file=sys.stderr)
             sys.exit(1)
         days_off = parse_dates(f"'days_off' for team member '{name}'", avail.get("days_off", []), path)
+        avail["own_days_off"] = days_off  # without the holidays, for the marks in the date header
         avail["days_off"] = days_off | holidays
         avail["in_team"] = parse_periods(name, avail.get("in_team"), path)
         if auto_assign and not has_working_hours(avail):
@@ -1726,10 +1727,70 @@ EPIC_COLORS = [
 ]
 
 
+MEMBER_COLORS = ["#e15759", "#4e79a7", "#59a14f", "#b07aa1", "#f28e2b", "#76b7b2", "#9c755f", "#edc948",
+                 "#ff9da7", "#bab0ac"]
+LONG_ABSENCE_DAYS = 5  # days off in a row from this many working days on are one bar in the date header
+
+
+def member_initials(name):
+    """Return the initials of a team member: "Rolf Heller" is "RH", "jeroen.de.koning" is "JK"."""
+    words = [w for w in re.split(r"[\s._-]+", name) if w]
+    if not words:
+        return "?"
+    if len(words) == 1:
+        return words[0][:2].upper()
+    return (words[0][0] + words[-1][0]).upper()
+
+
+def days_off_marks(team, holidays):
+    """Return the days off of each team member, for the marks in the date header of the chart.
+
+    The result is [{name, initials, color, runs: [{first, last, days, lane}]}], one entry per member
+    with days off, in the order of [team]. A run is a period of days off: its days are the working
+    days of the member in it, so without weekends, holidays, days with 0 hours and days outside the
+    team. Two days off are in one run when the member has no working day between them. A run of
+    LONG_ABSENCE_DAYS days or more is shown as one bar, in its lane; a shorter run has lane None.
+    """
+    holidays = set(holidays)
+
+    def works(d, avail):
+        return d not in holidays and is_in_team(d, avail) and avail.get(DAY_KEYS[d.weekday()], 0) > 0
+
+    members = []
+    for i, (name, avail) in enumerate(team.items()):
+        days = sorted(d for d in avail.get("own_days_off", ()) if works(d, avail))
+        runs = []
+        for d in days:
+            if runs:
+                last = runs[-1]["days"][-1]
+                between = (last + timedelta(days=n) for n in range(1, (d - last).days))
+                if not any(works(b, avail) for b in between):
+                    runs[-1]["days"].append(d)
+                    continue
+            runs.append({"days": [d]})
+        if runs:
+            members.append({"name": name, "initials": member_initials(name),
+                            "color": MEMBER_COLORS[i % len(MEMBER_COLORS)], "runs": runs})
+    # The bars of long runs that overlap go in lanes above each other
+    lane_ends = []
+    long_runs = sorted((r for m in members for r in m["runs"] if len(r["days"]) >= LONG_ABSENCE_DAYS),
+                       key=lambda r: r["days"][0])
+    for run in long_runs:
+        lane = next((n for n, end in enumerate(lane_ends) if end < run["days"][0]), len(lane_ends))
+        if lane == len(lane_ends):
+            lane_ends.append(None)
+        lane_ends[lane] = run["days"][-1]
+        run["lane"] = lane
+    for m in members:
+        m["runs"] = [{"first": r["days"][0].isoformat(), "last": r["days"][-1].isoformat(),
+                      "days": [d.isoformat() for d in r["days"]], "lane": r.get("lane")} for r in m["runs"]]
+    return members
+
+
 def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=(), status_colors=None,
                      compare_date=None, snapshots=(), removed=(), icon_images=None, epic_icon_url="",
                      epics_info=None, roadmap_epics=(), epic_order=(), visuals=None, group_by_space=False,
-                     keep_story_order=False):
+                     keep_story_order=False, team=None):
     """Write a self-contained HTML file with a DHTMLX Gantt chart.
 
     With snapshots from before today, the page can compare the plan with any of them: its list picks
@@ -1747,6 +1808,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     With keep_story_order, the stories of an epic keep the order of scheduled_stories, such as the
     Jira rank, instead of being sorted by start date. Done stories still come first.
     visuals is the [visuals] of the configuration, from parse_visuals.
+    team is the [team] of the configuration. The days off of its members are marked in the date header.
     """
     # Assign colors to epics
     epics_seen = []
@@ -2062,6 +2124,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     tasks_json = json.dumps(tasks, indent=2)
     links_json = json.dumps(links, indent=2)
     holidays_json = json.dumps(sorted(d.isoformat() for d in holidays))
+    days_off_json = json.dumps(days_off_marks(team or {}, holidays), separators=(",", ":"))
     icon_images_json = json.dumps(icon_images or {})
     plans_json = json.dumps(plan_history(snapshots, date.today()), separators=(",", ":"))
     compare_date_json = json.dumps(compare_date)
@@ -2251,6 +2314,31 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   /* The row under the mouse darkens in the grid and in the timeline. The row colors above have the
      #gantt_here prefix, so they win over the grey hover of dhtmlx, and this layer darkens them. */
   #gantt_here {{ --dhx-gantt-base-colors-hover-color: var(--dhx-gantt-task-row-background); }}
+  /* The date row of the header has a line of marks under the date: holidays and days off. dhtmlx gives
+     the rows of the header the same height, so the date row, the last one, takes what the row above leaves. */
+  #gantt_here .gantt_task_scale {{ display: flex; flex-direction: column; }}
+  #gantt_here .gantt_task_scale .gantt_scale_line {{ height: auto !important; flex: 1 1 auto; }}
+  #gantt_here .gantt_task_scale .gantt_scale_line:not(:last-child) {{ flex: 0 0 24px; line-height: 24px !important; }}
+  #gantt_here .gantt_task_scale .gantt_scale_line:last-child {{ line-height: normal !important; }}
+  #gantt_here .gantt_scale_line:last-child .gantt_scale_cell {{ height: 100%; }}
+  #gantt_here .gantt_scale_line:last-child .gantt_scale_cell > span {{ display: block; height: 100%; }}
+  .marked-cell {{ position: relative; height: 100%; }}
+  .marked-label {{ line-height: 16px; padding-top: 2px; }}
+  .marked-marks {{ display: flex; justify-content: center; align-items: center; height: 16px; }}
+  .holiday-flag {{ color: #c62828; }}
+  .holiday-count {{ font-size: 10px; color: #c62828; font-weight: 600; margin: 0 3px 0 1px; }}
+  .off-avatar {{ display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px;
+    border-radius: 50%; border: 1px solid #fff; box-sizing: border-box; color: #fff; font-size: 8px;
+    font-weight: 700; letter-spacing: -0.2px; text-transform: none; line-height: 1; }}
+  .off-avatar + .off-avatar, .holiday-flag + .off-avatar {{ margin-left: -4px; }}
+  .holiday-flag + .off-avatar {{ margin-left: 2px; }}
+  .off-avatar.off-more {{ background: #888; }}
+  /* A long absence: a bar across its days, one lane for each absence at the same time */
+  .off-bar {{ position: absolute; left: -1px; right: -1px; height: 9px; color: #fff; font-size: 7px; font-weight: 700;
+    line-height: 9px; padding-left: 4px; text-align: left; text-transform: none; overflow: hidden; }}
+  .off-bar.bar-first {{ left: 2px; border-radius: 5px 0 0 5px; }}
+  .off-bar.bar-last {{ right: 2px; border-radius: 0 5px 5px 0; }}
+  .off-bar.bar-first.bar-last {{ border-radius: 5px; }}
   /* The info popup has the look of the dhtmlx tooltip (class gantt_tooltip); the page places it */
   #task-popup {{ position: fixed; z-index: 10001; pointer-events: none; }}
   #task-popup:not(.shown) {{ display: none; }}
@@ -2698,39 +2786,167 @@ gantt.config.row_height = 32;
 gantt.config.bar_height = 24;
 gantt.config.fit_tasks = true;
 gantt.config.show_progress = true;
+// Holidays and days off in the date row of the header. At the day and week levels a day shows a flag on a
+// holiday, and the initials of each team member who is off that day. A long absence is one bar across its days.
+// At the month and quarter levels a week or month shows a flag when it has a holiday and the initials of the
+// team members who are off in it. Only the team members that the Team member filter shows are marked.
+var holidayDays = new Set({holidays_json});
+var daysOff = {days_off_json};
+var offByDay = {{}};  // {{"YYYY-MM-DD": [{{member, run}}]}} for the days off of short absences
+var barLanes = 0;
+daysOff.forEach(function(member) {{
+  member.runs.forEach(function(run) {{
+    if (run.lane !== null) {{ barLanes = Math.max(barLanes, run.lane + 1); return; }}
+    run.days.forEach(function(day) {{ (offByDay[day] = offByDay[day] || []).push({{ member: member, run: run }}); }});
+  }});
+}});
+var TOP_ROW = 24, BAR_LANE = 11;
+var DAY_ROW = 34 + barLanes * BAR_LANE;  // date, marks and the bars of long absences
+var SUMMARY_ROW = 34;
+var MAX_AVATARS = 3;
+var isoDay = gantt.date.date_to_str("%Y-%m-%d");
+var shortDay = gantt.date.date_to_str("%d %M");
+var parseDay = gantt.date.str_to_date("%Y-%m-%d");
+var FLAG_SVG = "<svg class='holiday-flag' viewBox='0 0 12 14' width='11' height='13' aria-hidden='true'>" +
+  "<path d='M1.5 1v12' stroke='currentColor' stroke-width='1.5' stroke-linecap='round'/>" +
+  "<path d='M2.5 1.5h8l-2 3 2 3h-8z' fill='currentColor'/></svg>";
+function escapeText(text) {{
+  return String(text).replace(/[&<>"']/g, function(c) {{
+    return {{"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}}[c];
+  }});
+}}
+function isMemberMarked(member) {{
+  return Object.keys(selectedMembers).length === 0 || !!selectedMembers[member.name];
+}}
+function isWeekend(date) {{
+  return date.getDay() === 0 || date.getDay() === 6;
+}}
+function avatarHtml(member) {{
+  return "<span class='off-avatar' style='background:" + member.color + "'>" + escapeText(member.initials) + "</span>";
+}}
+// The avatars of the members, at most MAX_AVATARS and then "+N"
+function avatarStack(members) {{
+  var shown = members.length > MAX_AVATARS + 1 ? members.slice(0, MAX_AVATARS) : members;
+  var html = shown.map(avatarHtml).join("");
+  if (shown.length < members.length) html += "<span class='off-avatar off-more'>+" + (members.length - shown.length) + "</span>";
+  return html;
+}}
+// The cell of the date row: the date, a line with the marks and, under it, the bars. tip is the text of the popup.
+function markedCell(label, marks, tip, bars) {{
+  return "<div class='marked-cell'><div class='marked-label'>" + label + "</div>" +
+    "<div class='marked-marks'" + (tip ? " data-mark-tip='" + escapeText(tip) + "'" : "") + ">" + marks + "</div>" +
+    (bars || "") + "</div>";
+}}
+function runText(member, run) {{
+  var n = run.days.length;
+  return member.name + ": off " + (run.first === run.last ? shortDay(parseDay(run.first)) :
+    shortDay(parseDay(run.first)) + " to " + shortDay(parseDay(run.last))) + " (" + n + " working day" + (n === 1 ? "" : "s") + ")";
+}}
+// The bars of the long absences that go over this day. The initials are on the first day and on each Monday.
+function dayBars(date, key) {{
+  var html = "";
+  daysOff.forEach(function(member) {{
+    if (!isMemberMarked(member)) return;
+    member.runs.forEach(function(run) {{
+      if (run.lane === null || key < run.first || key > run.last) return;
+      var cls = "off-bar" + (key === run.first ? " bar-first" : "") + (key === run.last ? " bar-last" : "");
+      var label = key === run.first || date.getDay() === 1 ? escapeText(member.initials) : "";
+      html += "<div class='" + cls + "' style='background:" + member.color + ";bottom:" + (2 + run.lane * BAR_LANE) + "px'" +
+        " data-mark-tip='" + escapeText(runText(member, run)) + "'>" + label + "</div>";
+    }});
+  }});
+  return html;
+}}
+// A weekend or a holiday in the date row is grey, as in the timeline under it
+function holidayCellClass(date) {{
+  return isWeekend(date) || holidayDays.has(isoDay(date)) ? "weekend" : "";
+}}
+function dayCell(format) {{
+  var label = gantt.date.date_to_str(format);
+  return function(date) {{
+    var key = isoDay(date);
+    var marks = "", tip = "";
+    if (holidayDays.has(key) && !isWeekend(date)) {{
+      marks = FLAG_SVG;
+      tip = "Holiday";
+    }} else {{
+      var members = (offByDay[key] || []).filter(function(off) {{ return isMemberMarked(off.member); }});
+      marks = avatarStack(members.map(function(off) {{ return off.member; }}));
+      tip = members.map(function(off) {{ return runText(off.member, off.run); }}).join("\\n");
+    }}
+    return markedCell(label(date), marks, tip, dayBars(date, key));
+  }};
+}}
+// The cell of a week or month: a flag with the number of holidays, and the members with days off in it
+function summaryCell(format, unit) {{
+  var label = gantt.date.date_to_str(format);
+  return function(date) {{
+    var end = gantt.date.add(date, 1, unit);
+    var holidays = [], offDays = {{}};
+    for (var d = new Date(date); d < end; d = gantt.date.add(d, 1, "day")) {{
+      var key = isoDay(d);
+      if (holidayDays.has(key) && !isWeekend(d)) holidays.push(shortDay(d));
+    }}
+    // Per member the number of days off in this week or month, and the periods they are in, cut to it
+    var from = isoDay(date), to = isoDay(gantt.date.add(end, -1, "day"));
+    var offPeriods = {{}};
+    daysOff.forEach(function(member) {{
+      if (!isMemberMarked(member)) return;
+      member.runs.forEach(function(run) {{
+        var days = run.days.filter(function(day) {{ return day >= from && day <= to; }});
+        if (!days.length) return;
+        offDays[member.name] = (offDays[member.name] || 0) + days.length;
+        var first = shortDay(parseDay(days[0])), last = shortDay(parseDay(days[days.length - 1]));
+        (offPeriods[member.name] = offPeriods[member.name] || []).push(first === last ? first : first + " to " + last);
+      }});
+    }});
+    var members = daysOff.filter(function(member) {{ return offDays[member.name]; }});
+    var marks = "", tips = [];
+    if (holidays.length) {{
+      marks += FLAG_SVG + (holidays.length > 1 ? "<span class='holiday-count'>" + holidays.length + "</span>" : "");
+      tips.push((holidays.length > 1 ? "Holidays: " : "Holiday: ") + holidays.join(", "));
+    }}
+    marks += avatarStack(members);
+    members.forEach(function(member) {{
+      var n = offDays[member.name];
+      tips.push(member.name + ": " + n + " day" + (n === 1 ? "" : "s") + " off (" + offPeriods[member.name].join(", ") + ")");
+    }});
+    return markedCell(label(date), marks, tips.join("\\n"));
+  }};
+}}
 gantt.ext.zoom.init({{
   levels: [
     {{
       name: "day",
-      scale_height: 27,
+      scale_height: DAY_ROW,
       min_column_width: 80,
-      scales: [{{ unit: "day", step: 1, format: "%d %M" }}]
+      scales: [{{ unit: "day", step: 1, format: dayCell("%d %M"), sticky: false, css: holidayCellClass }}]
     }},
     {{
       name: "week",
-      scale_height: 50,
+      scale_height: TOP_ROW + DAY_ROW,
       min_column_width: 50,
       scales: [
         {{ unit: "week", step: 1, format: "Week %W" }},
-        {{ unit: "day", step: 1, format: "%j %D" }}
+        {{ unit: "day", step: 1, format: dayCell("%j %D"), sticky: false, css: holidayCellClass }}
       ]
     }},
     {{
       name: "month",
-      scale_height: 50,
+      scale_height: TOP_ROW + SUMMARY_ROW,
       min_column_width: 120,
       scales: [
         {{ unit: "month", step: 1, format: "%F %Y" }},
-        {{ unit: "week", step: 1, format: "W%W" }}
+        {{ unit: "week", step: 1, format: summaryCell("W%W", "week"), sticky: false }}
       ]
     }},
     {{
       name: "quarter",
-      scale_height: 50,
+      scale_height: TOP_ROW + SUMMARY_ROW,
       min_column_width: 90,
       scales: [
         {{ unit: "year", step: 1, format: "%Y" }},
-        {{ unit: "month", step: 1, format: "%M" }}
+        {{ unit: "month", step: 1, format: summaryCell("%M", "month"), sticky: false }}
       ]
     }}
   ]
@@ -3274,7 +3490,22 @@ gantt.addMarker({{ start_date: new Date(), css: "today-marker", text: "Today" }}
     popup.classList.remove("shown");
     shownId = null;
   }}
+  // A mark of a holiday or of days off in the date header: its text, under the header
+  function showMark(mark, e) {{
+    var tip = mark.getAttribute("data-mark-tip");
+    if (shownId !== tip) {{
+      popup.innerHTML = "<div>" + escapeText(tip).replace(/\\n/g, "<br/>") + "</div>";
+      popup.classList.add("shown");
+      shownId = tip;
+    }}
+    var scaleBox = gantt.$task_scale.getBoundingClientRect();
+    var left = Math.min(e.clientX + 12, window.innerWidth - popup.offsetWidth - 8);
+    popup.style.left = Math.max(8, left) + "px";
+    popup.style.top = scaleBox.bottom + 4 + "px";
+  }}
   container.addEventListener("mousemove", function(e) {{
+    var mark = e.target.closest("[data-mark-tip]");
+    if (mark && mark.getAttribute("data-mark-tip")) return showMark(mark, e);
     var spot = e.target.closest(".gantt_task_line, .gantt_grid_data .gantt_cell[data-column-name='text']");
     if (!spot || e.target.closest(".gantt_side_content, .field-badge, .tree-buttons")) return hide();
     var id = spot.closest("[data-task-id]").getAttribute("data-task-id");
@@ -3643,7 +3874,7 @@ def run_gantt(config_path, history_dir=None, since=None):
                      compare_date, snapshots, removed, icon_images, epic_icon_url, epics_info, roadmap_epics,
                      epic_order,
                      config.visuals, group_by_space=config.use_backlog_order and config.group_by_space,
-                     keep_story_order=config.use_backlog_order)
+                     keep_story_order=config.use_backlog_order, team=config.team)
 
 
 def run_velocity(config_path, weeks):
