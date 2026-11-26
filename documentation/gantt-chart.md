@@ -11,11 +11,12 @@ chart to the stories that are shown. After Fit All, it does the same. In every s
 has 300 pixels of room after the last bar, so you can read the text next to it, and Fit All keeps
 that room in view.
 
-The row under the mouse is darker across the whole chart, and a thin vertical line follows the
-mouse over the timeline, so you can read off the date. A red line marks the current day. Point at
-a bar, or at a title in the Story column, to see the dates and changes of that story under its row.
-Click a bar to open its Jira issue. Issue icons are embedded in the page so they work without a Jira
-login; an emoji is used when an icon cannot be downloaded.
+The row under the mouse is darker across the whole chart, and a thin vertical line follows the mouse
+over the timeline, so you can read off the date. A red line marks the current day, and the **Today**
+button left of the search box scrolls the timeline back to it. Point at a bar, or at a title in the
+Story column, to see the dates and changes of that story under its row. Click a bar to open its Jira
+issue. Issue icons are embedded in the page so they work without a Jira login; an emoji is used when
+an icon cannot be downloaded.
 
 ## What the chart shows
 

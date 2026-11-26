@@ -2313,7 +2313,8 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     border-radius: 2px; background: {SPACE_COLOR};
   }}
   #show-done-wrap {{ display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }}
-  #search-wrap {{ position: relative; margin-left: auto; }}
+  #today-button {{ margin-left: auto; }}
+  #search-wrap {{ position: relative; }}
   #search-input {{
     padding: 5px 10px; border: 1px solid #ccc; border-radius: 4px;
     font-size: 13px; min-width: 220px;
@@ -2448,6 +2449,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     Compare with plan
     <select id="compare-plan" onchange="onComparePlanChange()"><option value="">none</option></select>
   </label>
+  <button id="today-button" onclick="scrollToToday()" title="Scroll the timeline to the current day">Today</button>
   <div id="search-wrap">
     <input id="search-input" type="search" placeholder="Search stories, for example PROJ-123" oninput="onSearchTyping()" onkeydown="if(event.key==='Escape'){{this.value='';clearTimeout(searchTimer);onSearchInput();}}">
     <span id="search-count"></span>
@@ -3247,6 +3249,21 @@ function shownDates() {{
     if (!end || task.end_date > end) end = task.end_date;
   }});
   return {{ start_date: start, end_date: end }};
+}}
+// Scrolls the timeline so that the current day is in the middle, and grows the timeline when it does not reach that day.
+function scrollToToday() {{
+  var today = gantt.date.day_start(new Date());
+  var halfView = gantt.$task.offsetWidth / 2;
+  // A timeline that does not reach the current day grows to half a view past it, so the day can scroll to the middle
+  if (today < gantt.config.start_date || today >= gantt.config.end_date) {{
+    var dayWidth = gantt.posFromDate(gantt.date.add(gantt.config.start_date, 1, "day")) -
+      gantt.posFromDate(gantt.config.start_date);
+    var margin = Math.ceil(halfView / dayWidth);
+    if (today < gantt.config.start_date) gantt.config.start_date = gantt.date.add(today, -margin, "day");
+    else gantt.config.end_date = gantt.date.add(today, margin + 1, "day");
+    gantt.render();
+  }}
+  gantt.scrollTo(Math.max(0, gantt.posFromDate(today) - halfView), null);
 }}
 function zoomToFit() {{
   var project = shownDates();

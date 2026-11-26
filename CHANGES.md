@@ -4,6 +4,8 @@ The tool has no version numbers yet. This file lists the changes per week, newes
 
 ## Week of 2026-11-23
 
+- Add a **Today** button left of the search box. It scrolls the timeline so the current day is in the
+  middle, and extends the timeline first when it does not reach that day.
 - Add the `workdays` setting, Monday to Friday by default. It sets the days of the standard week of
   eight hours, the day a `start_date` moves to, the days that the Moved column and the `impl` badge
   count, and the days that the chart does not shade grey. Before, these always used Monday to
