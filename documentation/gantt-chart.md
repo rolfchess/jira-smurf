@@ -30,7 +30,8 @@ login; an emoji is used when an icon cannot be downloaded.
   each space has a header row with its name and avatar above its epics. The row shows the total
   points of its visible stories, and a thin grey line in the timeline from the first start to the
   last end of its epics.
-- Weekends and holidays are shaded in day and week view, in the timeline and in the date header.
+- Days outside `workdays`, such as weekends, and holidays are shaded in day and week view, in the
+  timeline and in the date header.
 - The date header marks holidays and days off. In day and week view a holiday has a red flag, and a
   team member who is off has a round mark with their initials, in their color. Several members off
   on one day overlap, with at most three marks and then `+N`. An absence of five working days or

@@ -211,6 +211,7 @@ class GanttConfig:
     exclude: list  # [key or project key, ...] — uppercase; stories that match are left out of the chart
     badges: list  # [{field, label, color, stripe}, ...] — badges on epic rows where a Jira field is set
     visuals: dict  # {past_due_blink, past_due_color, behind_baseline_blink, behind_baseline_color, search_color}
+    workdays: tuple  # the keys of the working days of a normal week, such as ("mon", ..., "fri")
 
 
 def is_excluded(key, exclude):
@@ -301,11 +302,21 @@ def load_gantt_config(path="gantt.toml"):
         print(f"Error: 'start_date' must be YYYY-MM-DD, got '{start_str}'", file=sys.stderr)
         sys.exit(1)
 
-    # Warn and advance weekend start dates to Monday
-    if start.weekday() >= 5:  # Saturday=5, Sunday=6
-        monday = start + timedelta(days=(7 - start.weekday()))
-        print(f"Warning: start_date {start} is a weekend, advancing to {monday}", file=sys.stderr)
-        start = monday
+    # The working days of a normal week
+    workdays = raw.get("workdays", list(DEFAULT_WORKDAYS))
+    if (not isinstance(workdays, list) or not workdays or len(set(workdays)) != len(workdays)
+            or not all(day in DAY_KEYS for day in workdays)):
+        print(f"Error: 'workdays' must be a list of different days from {', '.join(map(repr, DAY_KEYS))}, "
+              f"got {workdays!r}", file=sys.stderr)
+        sys.exit(1)
+    workdays = tuple(day for day in DAY_KEYS if day in workdays)
+
+    # Warn and move a start date that is not a workday to the next workday
+    if DAY_KEYS[start.weekday()] not in workdays:
+        first = start
+        while DAY_KEYS[start.weekday()] not in workdays:
+            start += timedelta(days=1)
+        print(f"Warning: start_date {first} is not a workday, moving it to {start}", file=sys.stderr)
 
     # Holidays are days off for the whole team
     holidays = parse_dates("'holidays'", raw.get("holidays", []), path)
@@ -446,7 +457,8 @@ def load_gantt_config(path="gantt.toml"):
                        implementation_status=implementation_status or "",
                        exclude=[entry.strip().upper() for entry in exclude],
                        badges=badges,
-                       visuals=visuals)
+                       visuals=visuals,
+                       workdays=workdays)
 
 
 DEFAULT_BADGE_COLOR = "#d9a520"  # amber, so a badge does not look like the orange "over the estimate" badge
@@ -1076,6 +1088,7 @@ def resolve_epic_for_issue(issue, epic_cache):
 
 
 DAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+DEFAULT_WORKDAYS = ("mon", "tue", "wed", "thu", "fri")
 
 
 def is_in_team(d, availability):
@@ -1242,7 +1255,7 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
 
     # Without auto-assign, stories without an assignee are planned one after another
     # under "Unassigned", on a standard week
-    standard_week = {"mon": 8, "tue": 8, "wed": 8, "thu": 8, "fri": 8, "days_off": config.holidays}
+    standard_week = dict({day: 8 for day in config.workdays}, days_off=config.holidays)
     team = dict(config.team)
     if not config.auto_assign:
         team["Unassigned"] = standard_week
@@ -1458,7 +1471,7 @@ def pick_baseline(snapshots, run_date, since=None):
     return baseline
 
 
-def working_days_between(start, end, holidays):
+def working_days_between(start, end, holidays, workdays=DEFAULT_WORKDAYS):
     """Return the number of weekdays that are not holidays from start up to end.
 
     The result is negative when end is before start.
@@ -1469,7 +1482,7 @@ def working_days_between(start, end, holidays):
     days = 0
     d = start
     while d < end:
-        if d.weekday() < 5 and d not in holidays:
+        if DAY_KEYS[d.weekday()] in workdays and d not in holidays:
             days += 1
         d += timedelta(days=1)
     return sign * days
@@ -1507,11 +1520,11 @@ def story_age_days(created):
 HOURS_PER_DAY = 8  # one working day, to turn an estimate in hours into days
 
 
-def implementation_work_days(stretches, holidays):
+def implementation_work_days(stretches, holidays, workdays=DEFAULT_WORKDAYS):
     """Return the working days in the given stretches, or None without stretches.
 
     Each stretch is [first day, day it moved back] as YYYY-MM-DD, with "" for a stretch that is
-    still going on, which counts up to today. Weekends and holidays don't count. A stretch that
+    still going on, which counts up to today. Days outside workdays and holidays don't count. A stretch that
     started today, or that ended on the day it started, has 0 days.
     """
     if not stretches:
@@ -1519,7 +1532,7 @@ def implementation_work_days(stretches, holidays):
     try:
         return sum(max(working_days_between(date.fromisoformat(start[:10]),
                                             date.fromisoformat(end[:10]) if end else date.today(),
-                                            set(holidays)), 0)
+                                            set(holidays), workdays), 0)
                    for start, end in stretches)
     except ValueError:
         return None
@@ -1538,7 +1551,8 @@ def format_signed(value, unit):
     return f"{sign}{number}{unit}"
 
 
-def trend_html(snapshots, epic_color_map, holidays, compare_date=None, epic_spaces=None):
+def trend_html(snapshots, epic_color_map, holidays, compare_date=None, epic_spaces=None,
+               workdays=DEFAULT_WORKDAYS):
     """Return the HTML of a milestone trend chart: the planned end of each epic at each run.
 
     The table below the chart compares the latest run with the run of compare_date, or with
@@ -1636,7 +1650,7 @@ def trend_html(snapshots, epic_color_map, holidays, compare_date=None, epic_spac
         if then is None:
             then_cell = moved_cell = "–"
         else:
-            moved = working_days_between(then + timedelta(days=1), last + timedelta(days=1), holidays)
+            moved = working_days_between(then + timedelta(days=1), last + timedelta(days=1), holidays, workdays)
             then_cell = then.isoformat()
             moved_cell = format_signed(moved, " working days") if moved else "no change"
         row_class = f' class="{css_class}"' if css_class else ""
@@ -1800,7 +1814,7 @@ def days_off_marks(team, holidays, bar_from=DEFAULT_VISUALS["days_off_bar_from"]
 def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=(), status_colors=None,
                      compare_date=None, snapshots=(), removed=(), icon_images=None, epic_icon_url="",
                      epics_info=None, roadmap_epics=(), epic_order=(), visuals=None, group_by_space=False,
-                     keep_story_order=False, team=None):
+                     keep_story_order=False, team=None, workdays=DEFAULT_WORKDAYS):
     """Write a self-contained HTML file with a DHTMLX Gantt chart.
 
     With snapshots from before today, the page can compare the plan with any of them: its list picks
@@ -2059,7 +2073,8 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             "implementation_date": s.get("implementation_date", ""),
             "implementation_status": s.get("implementation_status", ""),
             # Working days in the implementation status or a later one, only for open stories
-            "implementation_days": (implementation_work_days(s.get("implementation_stretches", []), holidays)
+            "implementation_days": (implementation_work_days(s.get("implementation_stretches", []), holidays,
+                                                             workdays)
                                     if progress < 1.0 else None),
             # True when the story went back to an earlier status in between, so those days don't count
             "implementation_parked": len(s.get("implementation_stretches", [])) > 1,
@@ -2139,10 +2154,12 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
                 if header_visuals["enable_vacation_banners"] else [])
     days_off_json = json.dumps(days_off, separators=(",", ":"))
     holiday_icon_json = json.dumps(header_visuals["holiday_icon"])
+    # The workdays as numbers of JavaScript's Date.getDay(), where Sunday is 0
+    workdays_json = json.dumps([(DAY_KEYS.index(day) + 1) % 7 for day in workdays])
     icon_images_json = json.dumps(icon_images or {})
     plans_json = json.dumps(plan_history(snapshots, date.today()), separators=(",", ":"))
     compare_date_json = json.dumps(compare_date)
-    trend = trend_html(list(snapshots), epic_color_map, set(holidays), compare_date, epic_spaces)
+    trend = trend_html(list(snapshots), epic_color_map, set(holidays), compare_date, epic_spaces, workdays)
 
     # The outline of a story or epic that ends after its due date, blinking or not
     visuals = visuals or DEFAULT_VISUALS
@@ -2499,6 +2516,7 @@ function refreshChart() {{
 <script src="https://cdn.dhtmlx.com/gantt/9.0/dhtmlxgantt.js"></script>
 <script>
 gantt.plugins({{ marker: true }});
+var WORKDAYS = new Set({workdays_json});  // the days of the week that are workdays, as numbers of Date.getDay()
 var typeIconImages = {icon_images_json};  // {{icon address: data URI}} of the issue type icons from Jira
 var showChanges = false;  // true while a plan is picked in the Compare with plan list
 function signed(value, unit) {{
@@ -2523,7 +2541,7 @@ function workingDaysBetween(from, to) {{
   if (to < from) {{ var t = from; from = to; to = t; sign = -1; }}
   var days = 0;
   for (var d = new Date(from); d < to; d = gantt.date.add(d, 1, "day")) {{
-    if (d.getDay() !== 0 && d.getDay() !== 6 && !holidays.has(dayKey(d))) days++;
+    if (WORKDAYS.has(d.getDay()) && !holidays.has(dayKey(d))) days++;
   }}
   return sign * days;
 }}
@@ -2849,7 +2867,7 @@ function isMemberMarked(member) {{
   return Object.keys(selectedMembers).length === 0 || !!selectedMembers[member.name];
 }}
 function isWeekend(date) {{
-  return date.getDay() === 0 || date.getDay() === 6;
+  return !WORKDAYS.has(date.getDay());
 }}
 function avatarHtml(member) {{
   return "<span class='off-avatar' style='background:" + member.color + "'>" + escapeText(member.initials) + "</span>";
@@ -3423,7 +3441,7 @@ var dayKey = gantt.date.date_to_str("%Y-%m-%d");
 gantt.templates.timeline_cell_class = function(task, date) {{
   var scale = gantt.getState().scale_unit;
   if (scale !== "day") return "";
-  if (date.getDay() === 0 || date.getDay() === 6 || holidays.has(dayKey(date))) return "weekend";
+  if (isWeekend(date) || holidays.has(dayKey(date))) return "weekend";
   return "";
 }};
 // Thin striped lines at the dates of the compared plan, under the bars, in the dark shade of the bar color.
@@ -3907,7 +3925,7 @@ def run_gantt(config_path, history_dir=None, since=None):
                      compare_date, snapshots, removed, icon_images, epic_icon_url, epics_info, roadmap_epics,
                      epic_order,
                      config.visuals, group_by_space=config.use_backlog_order and config.group_by_space,
-                     keep_story_order=config.use_backlog_order, team=config.team)
+                     keep_story_order=config.use_backlog_order, team=config.team, workdays=config.workdays)
 
 
 def run_velocity(config_path, weeks):

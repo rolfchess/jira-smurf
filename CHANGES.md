@@ -4,6 +4,10 @@ The tool has no version numbers yet. This file lists the changes per week, newes
 
 ## Week of 2026-11-23
 
+- Add the `workdays` setting, Monday to Friday by default. It sets the days of the standard week of
+  eight hours, the day a `start_date` moves to, the days that the Moved column and the `impl` badge
+  count, and the days that the chart does not shade grey. Before, these always used Monday to
+  Friday.
 - Add `days_off_bar_from` to `[visuals]`: the number of working days off in a row from which an
   absence is one bar in the date header, instead of a mark on each day. It is 5 by default.
 - Add `holiday_icon` and `enable_vacation_banners` to `[visuals]`. `holiday_icon` sets the mark of

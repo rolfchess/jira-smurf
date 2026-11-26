@@ -2,6 +2,7 @@
 # Copy this file to gantt.toml, then adapt it to your project and team.
 
 start_date = "2026-01-05"       # first day in the plan, YYYY-MM-DD
+workdays = ["mon", "tue", "wed", "thu", "fri"]  # the working days of a normal week
 default_hours = 40              # estimate for stories without points
 velocity = 8.0                  # hours per story point
 include_open_sprints = false    # include every story in the active sprint
