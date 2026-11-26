@@ -6,6 +6,9 @@ The tool has no version numbers yet. This file lists the changes per week, newes
 
 - Add `days_off_bar_from` to `[visuals]`: the number of working days off in a row from which an
   absence is one bar in the date header, instead of a mark on each day. It is 5 by default.
+- Add `holiday_icon` and `enable_vacation_banners` to `[visuals]`. `holiday_icon = "none"` leaves out
+  the flags of holidays in the date header, and `enable_vacation_banners = false` the marks and bars
+  of days off. When nothing is left to mark, the date header is lower.
 - Mark holidays and days off in the date header of the chart. A holiday has a red flag, and a team
   member who is off has a round mark with their initials in their own color. Several members off on one day overlap, up to three and then
   `+N`, and an absence of five working days or more is one bar across its days. In month and quarter

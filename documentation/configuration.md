@@ -69,6 +69,8 @@ behind_baseline_blink = true
 behind_baseline_color = "#f2c200"
 search_color = "#9c27b0"
 days_off_bar_from = 5
+holiday_icon = "flag"
+enable_vacation_banners = true
 ```
 
 All `[visuals]` settings are optional. `past_due_blink` and `past_due_color` set the outline of a
@@ -77,7 +79,11 @@ and `behind_baseline_color` set the outline of a story that should have finished
 compared plan: still and yellow by default. `search_color` is the color of the search box while it
 has text, and of the frame around the rows it finds: violet by default. `days_off_bar_from` is the
 number of working days off in a row from which an absence is one bar in the date header, instead of
-a mark on each day: 5 by default. With 1, every day off is a bar.
+a mark on each day: 5 by default. With 1, every day off is a bar. `holiday_icon` is `"flag"`, the
+default, for a red flag on each holiday in the date header, or `"none"` for no mark. Holidays stay
+grey in the chart either way. With `enable_vacation_banners = false`, the date header shows no marks
+or bars for days off; the planning still uses the days off. When the date header has nothing left to
+mark, it is lower.
 
 ## Epic badges
 

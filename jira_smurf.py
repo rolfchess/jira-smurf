@@ -511,12 +511,13 @@ def parse_badges(badges_raw, path):
 
 DEFAULT_VISUALS = {"past_due_blink": True, "past_due_color": "#d62728",
                    "behind_baseline_blink": False, "behind_baseline_color": "#f2c200", "search_color": "#9c27b0",
-                   "days_off_bar_from": 5}
+                   "days_off_bar_from": 5, "holiday_icon": "flag", "enable_vacation_banners": True}
+HOLIDAY_ICONS = ("flag", "none")
 
 
 def parse_visuals(visuals_raw, path):
     """Return the [visuals] of the configuration as {past_due_blink, past_due_color, behind_baseline_blink,
-    behind_baseline_color, search_color, days_off_bar_from}.
+    behind_baseline_color, search_color, days_off_bar_from, holiday_icon, enable_vacation_banners}.
 
     Each setting is optional and has the value of DEFAULT_VISUALS when it is left out.
     """
@@ -528,7 +529,7 @@ def parse_visuals(visuals_raw, path):
         print(f"Error: [visuals] in {path} has unknown settings: {', '.join(sorted(unknown))}", file=sys.stderr)
         sys.exit(1)
     visuals = dict(DEFAULT_VISUALS, **visuals_raw)
-    for name in ("past_due_blink", "behind_baseline_blink"):
+    for name in ("past_due_blink", "behind_baseline_blink", "enable_vacation_banners"):
         if not isinstance(visuals[name], bool):
             print(f"Error: '{name}' in [visuals] must be true or false, got {visuals[name]!r}", file=sys.stderr)
             sys.exit(1)
@@ -541,6 +542,10 @@ def parse_visuals(visuals_raw, path):
     if isinstance(bar_from, bool) or not isinstance(bar_from, int) or bar_from < 1:
         print(f"Error: 'days_off_bar_from' in [visuals] must be a whole number of 1 or more, got {bar_from!r}",
               file=sys.stderr)
+        sys.exit(1)
+    if visuals["holiday_icon"] not in HOLIDAY_ICONS:
+        print(f"Error: 'holiday_icon' in [visuals] must be one of {', '.join(map(repr, HOLIDAY_ICONS))}, "
+              f"got {visuals['holiday_icon']!r}", file=sys.stderr)
         sys.exit(1)
     return visuals
 
@@ -2129,8 +2134,11 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     tasks_json = json.dumps(tasks, indent=2)
     links_json = json.dumps(links, indent=2)
     holidays_json = json.dumps(sorted(d.isoformat() for d in holidays))
-    days_off_json = json.dumps(days_off_marks(team or {}, holidays, (visuals or DEFAULT_VISUALS)["days_off_bar_from"]),
-                               separators=(",", ":"))
+    header_visuals = visuals or DEFAULT_VISUALS
+    days_off = (days_off_marks(team or {}, holidays, header_visuals["days_off_bar_from"])
+                if header_visuals["enable_vacation_banners"] else [])
+    days_off_json = json.dumps(days_off, separators=(",", ":"))
+    holiday_icon_json = json.dumps(header_visuals["holiday_icon"])
     icon_images_json = json.dumps(icon_images or {})
     plans_json = json.dumps(plan_history(snapshots, date.today()), separators=(",", ":"))
     compare_date_json = json.dumps(compare_date)
@@ -2798,6 +2806,7 @@ gantt.config.show_progress = true;
 // team members who are off in it. Only the team members that the Team member filter shows are marked.
 var holidayDays = new Set({holidays_json});
 var daysOff = {days_off_json};
+var HOLIDAY_ICON = {holiday_icon_json};  // "flag", or "none" for no mark on a holiday in the date header
 var offByDay = {{}};  // {{"YYYY-MM-DD": [{{member, run}}]}} for the days off of short absences
 var barLanes = 0;
 daysOff.forEach(function(member) {{
@@ -2807,8 +2816,10 @@ daysOff.forEach(function(member) {{
   }});
 }});
 var TOP_ROW = 24, BAR_LANE = 11;
-var DAY_ROW = 34 + barLanes * BAR_LANE;  // date, marks and the bars of long absences
-var SUMMARY_ROW = 34;
+// Without holiday flags and days off there is nothing to mark, so the date row has only the date
+var MARK_ROW = HOLIDAY_ICON !== "none" || daysOff.length > 0;
+var DAY_ROW = MARK_ROW ? 34 + barLanes * BAR_LANE : 26;  // date, marks and the bars of long absences
+var SUMMARY_ROW = MARK_ROW ? 34 : 26;
 var MAX_AVATARS = 3;
 var isoDay = gantt.date.date_to_str("%Y-%m-%d");
 var shortDay = gantt.date.date_to_str("%d %M");
@@ -2839,6 +2850,7 @@ function avatarStack(members) {{
 }}
 // The cell of the date row: the date, a line with the marks and, under it, the bars. tip is the text of the popup.
 function markedCell(label, marks, tip, bars) {{
+  if (!MARK_ROW) return label;
   return "<div class='marked-cell'><div class='marked-label'>" + label + "</div>" +
     "<div class='marked-marks'" + (tip ? " data-mark-tip='" + escapeText(tip) + "'" : "") + ">" + marks + "</div>" +
     (bars || "") + "</div>";
@@ -2873,8 +2885,10 @@ function dayCell(format) {{
     var key = isoDay(date);
     var marks = "", tip = "";
     if (holidayDays.has(key) && !isWeekend(date)) {{
-      marks = FLAG_SVG;
-      tip = "Holiday";
+      if (HOLIDAY_ICON === "flag") {{
+        marks = FLAG_SVG;
+        tip = "Holiday";
+      }}
     }} else {{
       var members = (offByDay[key] || []).filter(function(off) {{ return isMemberMarked(off.member); }});
       marks = avatarStack(members.map(function(off) {{ return off.member; }}));
@@ -2908,7 +2922,7 @@ function summaryCell(format, unit) {{
     }});
     var members = daysOff.filter(function(member) {{ return offDays[member.name]; }});
     var marks = "", tips = [];
-    if (holidays.length) {{
+    if (holidays.length && HOLIDAY_ICON === "flag") {{
       marks += FLAG_SVG + (holidays.length > 1 ? "<span class='holiday-count'>" + holidays.length + "</span>" : "");
       tips.push((holidays.length > 1 ? "Holidays: " : "Holiday: ") + holidays.join(", "));
     }}

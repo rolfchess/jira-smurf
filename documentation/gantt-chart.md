@@ -38,7 +38,9 @@ login; an emoji is used when an icon cannot be downloaded.
   each Monday. You can change that number of days with `days_off_bar_from` in `[visuals]`. In month
   and quarter view each week or month shows a flag, with the number of holidays when there are
   more, and the marks of the members who are off in it. Hover over a mark or bar to see the names
-  and dates. Only the members that the **Team member** filter shows are marked.
+  and dates. Only the members that the **Team member** filter shows are marked. Turn off the flags
+  with `holiday_icon = "none"`, and the marks and bars of days off with
+  `enable_vacation_banners = false`, both in `[visuals]`.
 - Colors remain when printing or saving as PDF.
 
 The Sprint column shows a story's latest sprint number. The Status column shows its current Jira
