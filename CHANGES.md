@@ -4,6 +4,8 @@ The tool has no version numbers yet. This file lists the changes per week, newes
 
 ## Week of 2026-11-23
 
+- Add `days_off_bar_from` to `[visuals]`: the number of working days off in a row from which an
+  absence is one bar in the date header, instead of a mark on each day. It is 5 by default.
 - Mark holidays and days off in the date header of the chart. A holiday has a red flag, and a team
   member who is off has a round mark with their initials in their own color. Several members off on one day overlap, up to three and then
   `+N`, and an absence of five working days or more is one bar across its days. In month and quarter

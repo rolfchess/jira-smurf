@@ -510,12 +510,13 @@ def parse_badges(badges_raw, path):
 
 
 DEFAULT_VISUALS = {"past_due_blink": True, "past_due_color": "#d62728",
-                   "behind_baseline_blink": False, "behind_baseline_color": "#f2c200", "search_color": "#9c27b0"}
+                   "behind_baseline_blink": False, "behind_baseline_color": "#f2c200", "search_color": "#9c27b0",
+                   "days_off_bar_from": 5}
 
 
 def parse_visuals(visuals_raw, path):
-    """Return the [visuals] of the configuration as
-    {past_due_blink, past_due_color, behind_baseline_blink, behind_baseline_color}.
+    """Return the [visuals] of the configuration as {past_due_blink, past_due_color, behind_baseline_blink,
+    behind_baseline_color, search_color, days_off_bar_from}.
 
     Each setting is optional and has the value of DEFAULT_VISUALS when it is left out.
     """
@@ -536,6 +537,11 @@ def parse_visuals(visuals_raw, path):
             print(f"Error: '{name}' in [visuals] must be a CSS color such as \"{DEFAULT_VISUALS[name]}\", "
                   f"got {visuals[name]!r}", file=sys.stderr)
             sys.exit(1)
+    bar_from = visuals["days_off_bar_from"]
+    if isinstance(bar_from, bool) or not isinstance(bar_from, int) or bar_from < 1:
+        print(f"Error: 'days_off_bar_from' in [visuals] must be a whole number of 1 or more, got {bar_from!r}",
+              file=sys.stderr)
+        sys.exit(1)
     return visuals
 
 
@@ -1729,7 +1735,6 @@ EPIC_COLORS = [
 
 MEMBER_COLORS = ["#e15759", "#4e79a7", "#59a14f", "#b07aa1", "#f28e2b", "#76b7b2", "#9c755f", "#edc948",
                  "#ff9da7", "#bab0ac"]
-LONG_ABSENCE_DAYS = 5  # days off in a row from this many working days on are one bar in the date header
 
 
 def member_initials(name):
@@ -1742,14 +1747,14 @@ def member_initials(name):
     return (words[0][0] + words[-1][0]).upper()
 
 
-def days_off_marks(team, holidays):
+def days_off_marks(team, holidays, bar_from=DEFAULT_VISUALS["days_off_bar_from"]):
     """Return the days off of each team member, for the marks in the date header of the chart.
 
     The result is [{name, initials, color, runs: [{first, last, days, lane}]}], one entry per member
     with days off, in the order of [team]. A run is a period of days off: its days are the working
     days of the member in it, so without weekends, holidays, days with 0 hours and days outside the
     team. Two days off are in one run when the member has no working day between them. A run of
-    LONG_ABSENCE_DAYS days or more is shown as one bar, in its lane; a shorter run has lane None.
+    bar_from days or more is shown as one bar, in its lane; a shorter run has lane None.
     """
     holidays = set(holidays)
 
@@ -1773,7 +1778,7 @@ def days_off_marks(team, holidays):
                             "color": MEMBER_COLORS[i % len(MEMBER_COLORS)], "runs": runs})
     # The bars of long runs that overlap go in lanes above each other
     lane_ends = []
-    long_runs = sorted((r for m in members for r in m["runs"] if len(r["days"]) >= LONG_ABSENCE_DAYS),
+    long_runs = sorted((r for m in members for r in m["runs"] if len(r["days"]) >= bar_from),
                        key=lambda r: r["days"][0])
     for run in long_runs:
         lane = next((n for n, end in enumerate(lane_ends) if end < run["days"][0]), len(lane_ends))
@@ -2124,7 +2129,8 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     tasks_json = json.dumps(tasks, indent=2)
     links_json = json.dumps(links, indent=2)
     holidays_json = json.dumps(sorted(d.isoformat() for d in holidays))
-    days_off_json = json.dumps(days_off_marks(team or {}, holidays), separators=(",", ":"))
+    days_off_json = json.dumps(days_off_marks(team or {}, holidays, (visuals or DEFAULT_VISUALS)["days_off_bar_from"]),
+                               separators=(",", ":"))
     icon_images_json = json.dumps(icon_images or {})
     plans_json = json.dumps(plan_history(snapshots, date.today()), separators=(",", ":"))
     compare_date_json = json.dumps(compare_date)

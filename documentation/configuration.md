@@ -68,13 +68,16 @@ past_due_color = "#d62728"
 behind_baseline_blink = true
 behind_baseline_color = "#f2c200"
 search_color = "#9c27b0"
+days_off_bar_from = 5
 ```
 
 All `[visuals]` settings are optional. `past_due_blink` and `past_due_color` set the outline of a
 story or epic that ends after its due date: blinking and red by default. `behind_baseline_blink`
 and `behind_baseline_color` set the outline of a story that should have finished by now in the
-compared plan: still and yellow by default. `search_color` is the color of the search box while it has text, and of the
-frame around the rows it finds: violet by default.
+compared plan: still and yellow by default. `search_color` is the color of the search box while it
+has text, and of the frame around the rows it finds: violet by default. `days_off_bar_from` is the
+number of working days off in a row from which an absence is one bar in the date header, instead of
+a mark on each day: 5 by default. With 1, every day off is a bar.
 
 ## Epic badges
 
