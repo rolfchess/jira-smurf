@@ -39,7 +39,9 @@ in_team = ["to 2026-06-30", "2026-09-01 to"]
 auto_assign = false
 ```
 
-- `days_off` accepts dates or inclusive date ranges.
+- `days_off` accepts dates or inclusive date ranges. The chart marks them in its date header, on
+  the working days of the member only: not on weekends, holidays, days with 0 hours or days outside
+  `in_team`.
 - `in_team` accepts membership periods with an optional open start or end. Without it, membership
   has no date limit.
 - Member-level `auto_assign = false` prevents automatic assignment to that person. It has no effect
