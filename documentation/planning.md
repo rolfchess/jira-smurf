@@ -27,10 +27,11 @@ or from Jira link types listed in `dependency_links`. Links to work outside the 
 ## Assignment
 
 - A story with a Jira assignee stays with that person.
-- An assignee outside `[team]` gets a separate row with eight hours per weekday and only global
-  holidays off.
+- An assignee outside `[team]` gets a separate row with eight hours on each day in `workdays` and
+  only global holidays off.
 - An unassigned story goes to the eligible member who can finish it first.
-- With `auto_assign = false`, unassigned work is scheduled sequentially under “Unassigned.”
+- With `auto_assign = false`, unassigned work is scheduled sequentially under “Unassigned,” with
+  eight hours on each day in `workdays`.
 - A member who leaves before completing a story is skipped when another member can finish it.
 - A story assigned in Jira to someone with no working hours left in the plan, for example because
   they left the team, is planned as an unassigned story, and the run prints a warning.

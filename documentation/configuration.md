@@ -8,6 +8,7 @@ The `gantt`, `serve`, and `velocity` commands read `gantt.toml` by default. Star
 | Setting                  | Purpose                                                                                |
 | ------------------------ | -------------------------------------------------------------------------------------- |
 | `start_date`             | First planning day in `YYYY-MM-DD` format                                              |
+| `workdays`               | Working days of a normal week; defaults to `["mon", "tue", "wed", "thu", "fri"]`       |
 | `default_hours`          | Estimate for a story without points                                                    |
 | `velocity`               | Team hours per story point                                                             |
 | `include_open_sprints`   | Include every story in the active sprint                                               |
@@ -20,6 +21,12 @@ The `gantt`, `serve`, and `velocity` commands read `gantt.toml` by default. Star
 | `auto_assign`            | Assign unowned stories to the earliest available member; `false` uses “Unassigned”     |
 | `exclude`                | Project or issue keys omitted from the plan, such as `["ARCH", "APP-123"]`             |
 | `holidays`               | Dates on which the whole team is unavailable                                           |
+
+`workdays` lists the working days of a normal week, with the keys `mon` to `sun`. A `start_date` that
+is not a workday moves to the next workday. Stories under “Unassigned” and stories of assignees
+outside `[team]` are planned with eight hours on each workday. The Moved column and the `impl` badge
+count only workdays, and the chart shades the other days grey. The hours of each member in `[team]`
+still decide on which days that member works.
 
 ## Team availability
 
@@ -40,7 +47,7 @@ auto_assign = false
 ```
 
 - `days_off` accepts dates or inclusive date ranges. The chart marks them in its date header, on
-  the working days of the member only: not on weekends, holidays, days with 0 hours or days outside
+  the working days of the member only: not on holidays, days with 0 hours or days outside
   `in_team`.
 - `in_team` accepts membership periods with an optional open start or end. Without it, membership
   has no date limit.
@@ -68,13 +75,23 @@ past_due_color = "#d62728"
 behind_baseline_blink = true
 behind_baseline_color = "#f2c200"
 search_color = "#9c27b0"
+days_off_bar_from = 5
+holiday_icon = "flag"
+enable_vacation_banners = true
 ```
 
 All `[visuals]` settings are optional. `past_due_blink` and `past_due_color` set the outline of a
-story or epic that ends after its due date: blinking and red by default. `behind_baseline_blink`
-and `behind_baseline_color` set the outline of a story that should have finished by now in the
-compared plan: still and yellow by default. `search_color` is the color of the search box while it has text, and of the
-frame around the rows it finds: violet by default.
+story or epic that ends after its due date: blinking and red by default. `behind_baseline_blink` and
+`behind_baseline_color` set the outline of a story that should have finished by now in the compared
+plan: still and yellow by default. `search_color` is the color of the search box while it has text,
+and of the frame around the rows it finds: violet by default. `days_off_bar_from` is the number of
+working days off in a row from which an absence is one bar in the date header, instead of a mark on
+each day: 5 by default. With 1, every day off is a bar. `holiday_icon` sets the red mark on each
+holiday in the date header: `"flag"`, the default, `"star"`, `"calendar"` for a small calendar page,
+`"dot"`, `"text"` for the letters HOL, or `"none"` for no mark. Holidays stay grey in the chart
+either way. With `enable_vacation_banners = false`, the date header shows no marks or bars for days
+off; the planning still uses the days off. When the date header has nothing left to mark, it is
+lower.
 
 ## Epic badges
 

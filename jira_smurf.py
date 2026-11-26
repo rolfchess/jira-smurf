@@ -211,6 +211,7 @@ class GanttConfig:
     exclude: list  # [key or project key, ...] — uppercase; stories that match are left out of the chart
     badges: list  # [{field, label, color, stripe}, ...] — badges on epic rows where a Jira field is set
     visuals: dict  # {past_due_blink, past_due_color, behind_baseline_blink, behind_baseline_color, search_color}
+    workdays: tuple  # the keys of the working days of a normal week, such as ("mon", ..., "fri")
 
 
 def is_excluded(key, exclude):
@@ -301,11 +302,21 @@ def load_gantt_config(path="gantt.toml"):
         print(f"Error: 'start_date' must be YYYY-MM-DD, got '{start_str}'", file=sys.stderr)
         sys.exit(1)
 
-    # Warn and advance weekend start dates to Monday
-    if start.weekday() >= 5:  # Saturday=5, Sunday=6
-        monday = start + timedelta(days=(7 - start.weekday()))
-        print(f"Warning: start_date {start} is a weekend, advancing to {monday}", file=sys.stderr)
-        start = monday
+    # The working days of a normal week
+    workdays = raw.get("workdays", list(DEFAULT_WORKDAYS))
+    if (not isinstance(workdays, list) or not workdays or len(set(workdays)) != len(workdays)
+            or not all(day in DAY_KEYS for day in workdays)):
+        print(f"Error: 'workdays' must be a list of different days from {', '.join(map(repr, DAY_KEYS))}, "
+              f"got {workdays!r}", file=sys.stderr)
+        sys.exit(1)
+    workdays = tuple(day for day in DAY_KEYS if day in workdays)
+
+    # Warn and move a start date that is not a workday to the next workday
+    if DAY_KEYS[start.weekday()] not in workdays:
+        first = start
+        while DAY_KEYS[start.weekday()] not in workdays:
+            start += timedelta(days=1)
+        print(f"Warning: start_date {first} is not a workday, moving it to {start}", file=sys.stderr)
 
     # Holidays are days off for the whole team
     holidays = parse_dates("'holidays'", raw.get("holidays", []), path)
@@ -446,7 +457,8 @@ def load_gantt_config(path="gantt.toml"):
                        implementation_status=implementation_status or "",
                        exclude=[entry.strip().upper() for entry in exclude],
                        badges=badges,
-                       visuals=visuals)
+                       visuals=visuals,
+                       workdays=workdays)
 
 
 DEFAULT_BADGE_COLOR = "#d9a520"  # amber, so a badge does not look like the orange "over the estimate" badge
@@ -510,12 +522,14 @@ def parse_badges(badges_raw, path):
 
 
 DEFAULT_VISUALS = {"past_due_blink": True, "past_due_color": "#d62728",
-                   "behind_baseline_blink": False, "behind_baseline_color": "#f2c200", "search_color": "#9c27b0"}
+                   "behind_baseline_blink": False, "behind_baseline_color": "#f2c200", "search_color": "#9c27b0",
+                   "days_off_bar_from": 5, "holiday_icon": "flag", "enable_vacation_banners": True}
+HOLIDAY_ICONS = ("flag", "star", "calendar", "dot", "text", "none")
 
 
 def parse_visuals(visuals_raw, path):
-    """Return the [visuals] of the configuration as
-    {past_due_blink, past_due_color, behind_baseline_blink, behind_baseline_color}.
+    """Return the [visuals] of the configuration as {past_due_blink, past_due_color, behind_baseline_blink,
+    behind_baseline_color, search_color, days_off_bar_from, holiday_icon, enable_vacation_banners}.
 
     Each setting is optional and has the value of DEFAULT_VISUALS when it is left out.
     """
@@ -527,7 +541,7 @@ def parse_visuals(visuals_raw, path):
         print(f"Error: [visuals] in {path} has unknown settings: {', '.join(sorted(unknown))}", file=sys.stderr)
         sys.exit(1)
     visuals = dict(DEFAULT_VISUALS, **visuals_raw)
-    for name in ("past_due_blink", "behind_baseline_blink"):
+    for name in ("past_due_blink", "behind_baseline_blink", "enable_vacation_banners"):
         if not isinstance(visuals[name], bool):
             print(f"Error: '{name}' in [visuals] must be true or false, got {visuals[name]!r}", file=sys.stderr)
             sys.exit(1)
@@ -536,6 +550,15 @@ def parse_visuals(visuals_raw, path):
             print(f"Error: '{name}' in [visuals] must be a CSS color such as \"{DEFAULT_VISUALS[name]}\", "
                   f"got {visuals[name]!r}", file=sys.stderr)
             sys.exit(1)
+    bar_from = visuals["days_off_bar_from"]
+    if isinstance(bar_from, bool) or not isinstance(bar_from, int) or bar_from < 1:
+        print(f"Error: 'days_off_bar_from' in [visuals] must be a whole number of 1 or more, got {bar_from!r}",
+              file=sys.stderr)
+        sys.exit(1)
+    if visuals["holiday_icon"] not in HOLIDAY_ICONS:
+        print(f"Error: 'holiday_icon' in [visuals] must be one of {', '.join(map(repr, HOLIDAY_ICONS))}, "
+              f"got {visuals['holiday_icon']!r}", file=sys.stderr)
+        sys.exit(1)
     return visuals
 
 
@@ -1065,6 +1088,7 @@ def resolve_epic_for_issue(issue, epic_cache):
 
 
 DAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+DEFAULT_WORKDAYS = ("mon", "tue", "wed", "thu", "fri")
 
 
 def is_in_team(d, availability):
@@ -1231,7 +1255,7 @@ def schedule_stories(config, story_data, ordered_keys, done_dates=None):
 
     # Without auto-assign, stories without an assignee are planned one after another
     # under "Unassigned", on a standard week
-    standard_week = {"mon": 8, "tue": 8, "wed": 8, "thu": 8, "fri": 8, "days_off": config.holidays}
+    standard_week = dict({day: 8 for day in config.workdays}, days_off=config.holidays)
     team = dict(config.team)
     if not config.auto_assign:
         team["Unassigned"] = standard_week
@@ -1447,7 +1471,7 @@ def pick_baseline(snapshots, run_date, since=None):
     return baseline
 
 
-def working_days_between(start, end, holidays):
+def working_days_between(start, end, holidays, workdays=DEFAULT_WORKDAYS):
     """Return the number of weekdays that are not holidays from start up to end.
 
     The result is negative when end is before start.
@@ -1458,7 +1482,7 @@ def working_days_between(start, end, holidays):
     days = 0
     d = start
     while d < end:
-        if d.weekday() < 5 and d not in holidays:
+        if DAY_KEYS[d.weekday()] in workdays and d not in holidays:
             days += 1
         d += timedelta(days=1)
     return sign * days
@@ -1496,11 +1520,11 @@ def story_age_days(created):
 HOURS_PER_DAY = 8  # one working day, to turn an estimate in hours into days
 
 
-def implementation_work_days(stretches, holidays):
+def implementation_work_days(stretches, holidays, workdays=DEFAULT_WORKDAYS):
     """Return the working days in the given stretches, or None without stretches.
 
     Each stretch is [first day, day it moved back] as YYYY-MM-DD, with "" for a stretch that is
-    still going on, which counts up to today. Weekends and holidays don't count. A stretch that
+    still going on, which counts up to today. Days outside workdays and holidays don't count. A stretch that
     started today, or that ended on the day it started, has 0 days.
     """
     if not stretches:
@@ -1508,7 +1532,7 @@ def implementation_work_days(stretches, holidays):
     try:
         return sum(max(working_days_between(date.fromisoformat(start[:10]),
                                             date.fromisoformat(end[:10]) if end else date.today(),
-                                            set(holidays)), 0)
+                                            set(holidays), workdays), 0)
                    for start, end in stretches)
     except ValueError:
         return None
@@ -1527,7 +1551,8 @@ def format_signed(value, unit):
     return f"{sign}{number}{unit}"
 
 
-def trend_html(snapshots, epic_color_map, holidays, compare_date=None, epic_spaces=None):
+def trend_html(snapshots, epic_color_map, holidays, compare_date=None, epic_spaces=None,
+               workdays=DEFAULT_WORKDAYS):
     """Return the HTML of a milestone trend chart: the planned end of each epic at each run.
 
     The table below the chart compares the latest run with the run of compare_date, or with
@@ -1625,7 +1650,7 @@ def trend_html(snapshots, epic_color_map, holidays, compare_date=None, epic_spac
         if then is None:
             then_cell = moved_cell = "–"
         else:
-            moved = working_days_between(then + timedelta(days=1), last + timedelta(days=1), holidays)
+            moved = working_days_between(then + timedelta(days=1), last + timedelta(days=1), holidays, workdays)
             then_cell = then.isoformat()
             moved_cell = format_signed(moved, " working days") if moved else "no change"
         row_class = f' class="{css_class}"' if css_class else ""
@@ -1729,7 +1754,6 @@ EPIC_COLORS = [
 
 MEMBER_COLORS = ["#e15759", "#4e79a7", "#59a14f", "#b07aa1", "#f28e2b", "#76b7b2", "#9c755f", "#edc948",
                  "#ff9da7", "#bab0ac"]
-LONG_ABSENCE_DAYS = 5  # days off in a row from this many working days on are one bar in the date header
 
 
 def member_initials(name):
@@ -1742,14 +1766,14 @@ def member_initials(name):
     return (words[0][0] + words[-1][0]).upper()
 
 
-def days_off_marks(team, holidays):
+def days_off_marks(team, holidays, bar_from=DEFAULT_VISUALS["days_off_bar_from"]):
     """Return the days off of each team member, for the marks in the date header of the chart.
 
     The result is [{name, initials, color, runs: [{first, last, days, lane}]}], one entry per member
     with days off, in the order of [team]. A run is a period of days off: its days are the working
     days of the member in it, so without weekends, holidays, days with 0 hours and days outside the
     team. Two days off are in one run when the member has no working day between them. A run of
-    LONG_ABSENCE_DAYS days or more is shown as one bar, in its lane; a shorter run has lane None.
+    bar_from days or more is shown as one bar, in its lane; a shorter run has lane None.
     """
     holidays = set(holidays)
 
@@ -1773,7 +1797,7 @@ def days_off_marks(team, holidays):
                             "color": MEMBER_COLORS[i % len(MEMBER_COLORS)], "runs": runs})
     # The bars of long runs that overlap go in lanes above each other
     lane_ends = []
-    long_runs = sorted((r for m in members for r in m["runs"] if len(r["days"]) >= LONG_ABSENCE_DAYS),
+    long_runs = sorted((r for m in members for r in m["runs"] if len(r["days"]) >= bar_from),
                        key=lambda r: r["days"][0])
     for run in long_runs:
         lane = next((n for n, end in enumerate(lane_ends) if end < run["days"][0]), len(lane_ends))
@@ -1790,7 +1814,7 @@ def days_off_marks(team, holidays):
 def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=(), status_colors=None,
                      compare_date=None, snapshots=(), removed=(), icon_images=None, epic_icon_url="",
                      epics_info=None, roadmap_epics=(), epic_order=(), visuals=None, group_by_space=False,
-                     keep_story_order=False, team=None):
+                     keep_story_order=False, team=None, workdays=DEFAULT_WORKDAYS):
     """Write a self-contained HTML file with a DHTMLX Gantt chart.
 
     With snapshots from before today, the page can compare the plan with any of them: its list picks
@@ -2049,7 +2073,8 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
             "implementation_date": s.get("implementation_date", ""),
             "implementation_status": s.get("implementation_status", ""),
             # Working days in the implementation status or a later one, only for open stories
-            "implementation_days": (implementation_work_days(s.get("implementation_stretches", []), holidays)
+            "implementation_days": (implementation_work_days(s.get("implementation_stretches", []), holidays,
+                                                             workdays)
                                     if progress < 1.0 else None),
             # True when the story went back to an earlier status in between, so those days don't count
             "implementation_parked": len(s.get("implementation_stretches", [])) > 1,
@@ -2124,11 +2149,17 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     tasks_json = json.dumps(tasks, indent=2)
     links_json = json.dumps(links, indent=2)
     holidays_json = json.dumps(sorted(d.isoformat() for d in holidays))
-    days_off_json = json.dumps(days_off_marks(team or {}, holidays), separators=(",", ":"))
+    header_visuals = visuals or DEFAULT_VISUALS
+    days_off = (days_off_marks(team or {}, holidays, header_visuals["days_off_bar_from"])
+                if header_visuals["enable_vacation_banners"] else [])
+    days_off_json = json.dumps(days_off, separators=(",", ":"))
+    holiday_icon_json = json.dumps(header_visuals["holiday_icon"])
+    # The workdays as numbers of JavaScript's Date.getDay(), where Sunday is 0
+    workdays_json = json.dumps([(DAY_KEYS.index(day) + 1) % 7 for day in workdays])
     icon_images_json = json.dumps(icon_images or {})
     plans_json = json.dumps(plan_history(snapshots, date.today()), separators=(",", ":"))
     compare_date_json = json.dumps(compare_date)
-    trend = trend_html(list(snapshots), epic_color_map, set(holidays), compare_date, epic_spaces)
+    trend = trend_html(list(snapshots), epic_color_map, set(holidays), compare_date, epic_spaces, workdays)
 
     # The outline of a story or epic that ends after its due date, blinking or not
     visuals = visuals or DEFAULT_VISUALS
@@ -2282,7 +2313,8 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     border-radius: 2px; background: {SPACE_COLOR};
   }}
   #show-done-wrap {{ display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }}
-  #search-wrap {{ position: relative; margin-left: auto; }}
+  #today-button {{ margin-left: auto; }}
+  #search-wrap {{ position: relative; }}
   #search-input {{
     padding: 5px 10px; border: 1px solid #ccc; border-radius: 4px;
     font-size: 13px; min-width: 220px;
@@ -2327,6 +2359,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
   .marked-marks {{ display: flex; justify-content: center; align-items: center; height: 16px; }}
   .holiday-flag {{ color: #c62828; }}
   .holiday-count {{ font-size: 10px; color: #c62828; font-weight: 600; margin: 0 3px 0 1px; }}
+  .holiday-text {{ font-size: 9px; font-weight: 700; letter-spacing: 0.3px; line-height: 13px; }}
   .off-avatar {{ display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px;
     border-radius: 50%; border: 1px solid #fff; box-sizing: border-box; color: #fff; font-size: 8px;
     font-weight: 700; letter-spacing: -0.2px; text-transform: none; line-height: 1; }}
@@ -2416,6 +2449,7 @@ def write_gantt_html(scheduled_stories, status_map, dependencies=None, holidays=
     Compare with plan
     <select id="compare-plan" onchange="onComparePlanChange()"><option value="">none</option></select>
   </label>
+  <button id="today-button" onclick="scrollToToday()" title="Scroll the timeline to the current day">Today</button>
   <div id="search-wrap">
     <input id="search-input" type="search" placeholder="Search stories, for example PROJ-123" oninput="onSearchTyping()" onkeydown="if(event.key==='Escape'){{this.value='';clearTimeout(searchTimer);onSearchInput();}}">
     <span id="search-count"></span>
@@ -2484,6 +2518,7 @@ function refreshChart() {{
 <script src="https://cdn.dhtmlx.com/gantt/9.0/dhtmlxgantt.js"></script>
 <script>
 gantt.plugins({{ marker: true }});
+var WORKDAYS = new Set({workdays_json});  // the days of the week that are workdays, as numbers of Date.getDay()
 var typeIconImages = {icon_images_json};  // {{icon address: data URI}} of the issue type icons from Jira
 var showChanges = false;  // true while a plan is picked in the Compare with plan list
 function signed(value, unit) {{
@@ -2508,7 +2543,7 @@ function workingDaysBetween(from, to) {{
   if (to < from) {{ var t = from; from = to; to = t; sign = -1; }}
   var days = 0;
   for (var d = new Date(from); d < to; d = gantt.date.add(d, 1, "day")) {{
-    if (d.getDay() !== 0 && d.getDay() !== 6 && !holidays.has(dayKey(d))) days++;
+    if (WORKDAYS.has(d.getDay()) && !holidays.has(dayKey(d))) days++;
   }}
   return sign * days;
 }}
@@ -2792,6 +2827,7 @@ gantt.config.show_progress = true;
 // team members who are off in it. Only the team members that the Team member filter shows are marked.
 var holidayDays = new Set({holidays_json});
 var daysOff = {days_off_json};
+var HOLIDAY_ICON = {holiday_icon_json};  // the mark of a holiday in the date header, or "none"
 var offByDay = {{}};  // {{"YYYY-MM-DD": [{{member, run}}]}} for the days off of short absences
 var barLanes = 0;
 daysOff.forEach(function(member) {{
@@ -2801,15 +2837,29 @@ daysOff.forEach(function(member) {{
   }});
 }});
 var TOP_ROW = 24, BAR_LANE = 11;
-var DAY_ROW = 34 + barLanes * BAR_LANE;  // date, marks and the bars of long absences
-var SUMMARY_ROW = 34;
+// Without holiday flags and days off there is nothing to mark, so the date row has only the date
+var MARK_ROW = HOLIDAY_ICON !== "none" || daysOff.length > 0;
+var DAY_ROW = MARK_ROW ? 34 + barLanes * BAR_LANE : 26;  // date, marks and the bars of long absences
+var SUMMARY_ROW = MARK_ROW ? 34 : 26;
 var MAX_AVATARS = 3;
 var isoDay = gantt.date.date_to_str("%Y-%m-%d");
 var shortDay = gantt.date.date_to_str("%d %M");
 var parseDay = gantt.date.str_to_date("%Y-%m-%d");
-var FLAG_SVG = "<svg class='holiday-flag' viewBox='0 0 12 14' width='11' height='13' aria-hidden='true'>" +
-  "<path d='M1.5 1v12' stroke='currentColor' stroke-width='1.5' stroke-linecap='round'/>" +
-  "<path d='M2.5 1.5h8l-2 3 2 3h-8z' fill='currentColor'/></svg>";
+var HOLIDAY_MARKS = {{
+  flag: "<svg class='holiday-flag' viewBox='0 0 12 14' width='11' height='13' aria-hidden='true'>" +
+    "<path d='M1.5 1v12' stroke='currentColor' stroke-width='1.5' stroke-linecap='round'/>" +
+    "<path d='M2.5 1.5h8l-2 3 2 3h-8z' fill='currentColor'/></svg>",
+  star: "<svg class='holiday-flag' viewBox='0 0 14 14' width='12' height='12' aria-hidden='true'>" +
+    "<path d='M7 1l1.8 3.9 4.2.5-3.1 2.9.8 4.2L7 10.4l-3.7 2.1.8-4.2L1 5.4l4.2-.5z' fill='currentColor'/></svg>",
+  calendar: "<svg class='holiday-flag' viewBox='0 0 12 13' width='11' height='12' aria-hidden='true'>" +
+    "<rect x='0.75' y='1.75' width='10.5' height='10.5' rx='1.5' fill='#fff' stroke='currentColor' stroke-width='1.5'/>" +
+    "<rect x='0.75' y='1.75' width='10.5' height='3' fill='currentColor'/>" +
+    "<rect x='4.5' y='7' width='3' height='3' fill='currentColor'/></svg>",
+  dot: "<svg class='holiday-flag' viewBox='0 0 10 10' width='8' height='8' aria-hidden='true'>" +
+    "<circle cx='5' cy='5' r='4' fill='currentColor'/></svg>",
+  text: "<span class='holiday-flag holiday-text'>HOL</span>"
+}};
+var HOLIDAY_MARK = HOLIDAY_MARKS[HOLIDAY_ICON] || "";
 function escapeText(text) {{
   return String(text).replace(/[&<>"']/g, function(c) {{
     return {{"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}}[c];
@@ -2819,7 +2869,7 @@ function isMemberMarked(member) {{
   return Object.keys(selectedMembers).length === 0 || !!selectedMembers[member.name];
 }}
 function isWeekend(date) {{
-  return date.getDay() === 0 || date.getDay() === 6;
+  return !WORKDAYS.has(date.getDay());
 }}
 function avatarHtml(member) {{
   return "<span class='off-avatar' style='background:" + member.color + "'>" + escapeText(member.initials) + "</span>";
@@ -2833,6 +2883,7 @@ function avatarStack(members) {{
 }}
 // The cell of the date row: the date, a line with the marks and, under it, the bars. tip is the text of the popup.
 function markedCell(label, marks, tip, bars) {{
+  if (!MARK_ROW) return label;
   return "<div class='marked-cell'><div class='marked-label'>" + label + "</div>" +
     "<div class='marked-marks'" + (tip ? " data-mark-tip='" + escapeText(tip) + "'" : "") + ">" + marks + "</div>" +
     (bars || "") + "</div>";
@@ -2867,8 +2918,10 @@ function dayCell(format) {{
     var key = isoDay(date);
     var marks = "", tip = "";
     if (holidayDays.has(key) && !isWeekend(date)) {{
-      marks = FLAG_SVG;
-      tip = "Holiday";
+      if (HOLIDAY_ICON !== "none") {{
+        marks = HOLIDAY_MARK;
+        tip = "Holiday";
+      }}
     }} else {{
       var members = (offByDay[key] || []).filter(function(off) {{ return isMemberMarked(off.member); }});
       marks = avatarStack(members.map(function(off) {{ return off.member; }}));
@@ -2902,8 +2955,8 @@ function summaryCell(format, unit) {{
     }});
     var members = daysOff.filter(function(member) {{ return offDays[member.name]; }});
     var marks = "", tips = [];
-    if (holidays.length) {{
-      marks += FLAG_SVG + (holidays.length > 1 ? "<span class='holiday-count'>" + holidays.length + "</span>" : "");
+    if (holidays.length && HOLIDAY_ICON !== "none") {{
+      marks += HOLIDAY_MARK + (holidays.length > 1 ? "<span class='holiday-count'>" + holidays.length + "</span>" : "");
       tips.push((holidays.length > 1 ? "Holidays: " : "Holiday: ") + holidays.join(", "));
     }}
     marks += avatarStack(members);
@@ -3197,6 +3250,21 @@ function shownDates() {{
   }});
   return {{ start_date: start, end_date: end }};
 }}
+// Scrolls the timeline so that the current day is in the middle, and grows the timeline when it does not reach that day.
+function scrollToToday() {{
+  var today = gantt.date.day_start(new Date());
+  var halfView = gantt.$task.offsetWidth / 2;
+  // A timeline that does not reach the current day grows to half a view past it, so the day can scroll to the middle
+  if (today < gantt.config.start_date || today >= gantt.config.end_date) {{
+    var dayWidth = gantt.posFromDate(gantt.date.add(gantt.config.start_date, 1, "day")) -
+      gantt.posFromDate(gantt.config.start_date);
+    var margin = Math.ceil(halfView / dayWidth);
+    if (today < gantt.config.start_date) gantt.config.start_date = gantt.date.add(today, -margin, "day");
+    else gantt.config.end_date = gantt.date.add(today, margin + 1, "day");
+    gantt.render();
+  }}
+  gantt.scrollTo(Math.max(0, gantt.posFromDate(today) - halfView), null);
+}}
 function zoomToFit() {{
   var project = shownDates();
   if (!project.start_date || !project.end_date) return;
@@ -3390,7 +3458,7 @@ var dayKey = gantt.date.date_to_str("%Y-%m-%d");
 gantt.templates.timeline_cell_class = function(task, date) {{
   var scale = gantt.getState().scale_unit;
   if (scale !== "day") return "";
-  if (date.getDay() === 0 || date.getDay() === 6 || holidays.has(dayKey(date))) return "weekend";
+  if (isWeekend(date) || holidays.has(dayKey(date))) return "weekend";
   return "";
 }};
 // Thin striped lines at the dates of the compared plan, under the bars, in the dark shade of the bar color.
@@ -3874,7 +3942,7 @@ def run_gantt(config_path, history_dir=None, since=None):
                      compare_date, snapshots, removed, icon_images, epic_icon_url, epics_info, roadmap_epics,
                      epic_order,
                      config.visuals, group_by_space=config.use_backlog_order and config.group_by_space,
-                     keep_story_order=config.use_backlog_order, team=config.team)
+                     keep_story_order=config.use_backlog_order, team=config.team, workdays=config.workdays)
 
 
 def run_velocity(config_path, weeks):
