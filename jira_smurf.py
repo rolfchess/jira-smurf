@@ -676,11 +676,21 @@ def fetch_backlog_order(story_keys):
     return positions
 
 
+def issue_type_noun(name, count):
+    """Return a Jira issue type name as a lowercase noun for the count, such as "story", "stories" or "bugs"."""
+    noun = name.lower()
+    if count == 1:
+        return noun
+    if noun.endswith("y") and noun[-2:-1] not in ("a", "e", "i", "o", "u"):
+        return noun[:-1] + "ies"
+    return noun + ("es" if noun.endswith(("s", "x", "ch", "sh")) else "s")
+
+
 def fetch_finished_stories(start, end, issue_types=DEFAULT_ISSUE_TYPES):
     """Fetch the issues of the given issue types that moved to a done status from start up to end (not included)."""
     jql = (f'project = {JIRA_PROJECT} AND {issue_type_clause(issue_types)} AND statusCategory = Done '
            f'AND statusCategoryChangedDate >= "{start}" AND statusCategoryChangedDate < "{end}" ORDER BY key ASC')
-    fields = f"summary,assignee,statuscategorychangedate,{STORY_POINTS_FIELD},customfield_10016"
+    fields = f"summary,assignee,issuetype,statuscategorychangedate,{STORY_POINTS_FIELD},customfield_10016"
     issues = []
     next_page_token = None
     while True:
@@ -3982,6 +3992,7 @@ def run_velocity(config_path, weeks):
     points = {w: 0.0 for w in week_starts}
     pointed = {w: 0 for w in week_starts}
     unpointed = {w: 0 for w in week_starts}
+    unpointed_types = {}  # the number of issues without points per issue type, such as {"Bug": 2}
     for issue in fetch_finished_stories(start, end, config.issue_types):
         fields = issue["fields"]
         if get_assignee(fields) not in config.team:
@@ -3993,6 +4004,8 @@ def run_velocity(config_path, weeks):
         story_points = get_story_points_numeric(fields)
         if story_points is None:
             unpointed[week] += 1
+            issue_type = (fields.get("issuetype") or {}).get("name") or "Story"
+            unpointed_types[issue_type] = unpointed_types.get(issue_type, 0) + 1
             story_points = assumed_points
         else:
             pointed[week] += 1
@@ -4026,8 +4039,11 @@ def run_velocity(config_path, weeks):
     else:
         print(f"No stories with story points were finished in the last {weeks} weeks.")
     if total_unpointed:
-        stories = "story had" if total_unpointed == 1 else "stories had"
-        print(f"{total_unpointed} finished {stories} no story points. Each counts as {assumed_points:.1f} points: "
+        order = [name.lower() for name in config.issue_types]
+        names = sorted(unpointed_types, key=lambda name: order.index(name.lower()) if name.lower() in order else len(order))
+        counts = [f"{unpointed_types[name]} finished {issue_type_noun(name, unpointed_types[name])}" for name in names]
+        listed = counts[0] if len(counts) == 1 else ", ".join(counts[:-1]) + " and " + counts[-1]
+        print(f"{listed} had no story points. Each counts as {assumed_points:.1f} points: "
               f"default_hours {config.default_hours:g} divided by velocity {config.velocity:g}.")
 
 
