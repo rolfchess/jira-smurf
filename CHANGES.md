@@ -18,6 +18,8 @@ The tool has no version numbers yet. This file lists what changed each week, new
 - Clicking an epic in the Story column collapses or expands it.
 - New settings: `workdays`, `group_by_space`, and in `[visuals]` `days_off_bar_from`,
   `holiday_icon` and `enable_vacation_banners`.
+- The `issue_types` setting plans other Jira issue types too, such as bugs and tasks. The default is
+  only stories, because bugs are normally part of the overhead in the velocity.
 
 ### Changed
 

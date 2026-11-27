@@ -34,6 +34,10 @@ usually more stable than one unusually fast week.
 Stories without points count as `default_hours ÷ velocity` points. For example, 40 default hours and
 a velocity of 8 count as five points.
 
+The command counts the finished issues of the types in `issue_types`, which is only stories by
+default. With `issue_types = ["Story", "Bug"]`, finished bugs count too, and a bug without points
+counts as `default_hours ÷ velocity` points.
+
 ## Keep the measurement useful
 
 Availability means hours assigned to the project, not uninterrupted development time. Meetings,
