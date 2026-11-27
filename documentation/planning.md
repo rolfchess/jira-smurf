@@ -8,6 +8,11 @@ Remaining hours are the estimate (`points × velocity`) multiplied by the status
 percentage. Stories without points use `default_hours`. Epic estimates are ignored; an epic spans
 its stories.
 
+The plan takes the issue types in `issue_types` from epics and sprints, which is only stories by
+default. Bugs are normally part of the overhead: they take time from the team, and that time is
+already in the velocity, so they do not need a place in the plan. Add `"Bug"` or `"Task"` to
+`issue_types` to plan them as well. A bug or task without points then uses `default_hours`.
+
 Work is grouped before it is ordered:
 
 1. done stories;

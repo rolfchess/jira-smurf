@@ -9,8 +9,9 @@ The `gantt`, `serve`, and `velocity` commands read `gantt.toml` by default. Star
 | ------------------------ | -------------------------------------------------------------------------------------- |
 | `start_date`             | First planning day in `YYYY-MM-DD` format                                              |
 | `workdays`               | Working days of a normal week; defaults to `["mon", "tue", "wed", "thu", "fri"]`       |
-| `default_hours`          | Estimate for a story without points                                                    |
+| `default_hours`          | Estimate for a story, bug or task without points                                       |
 | `velocity`               | Team hours per story point                                                             |
+| `issue_types`            | Jira issue types that are planned and counted in the velocity; defaults to `["Story"]` |
 | `include_open_sprints`   | Include every story in the active sprint                                               |
 | `include_future_sprints` | Include every story in future sprints                                                  |
 | `use_backlog_order`      | Use Jira backlog order instead of configuration order                                  |
@@ -27,6 +28,16 @@ is not a workday moves to the next workday. Stories under “Unassigned” and s
 outside `[team]` are planned with eight hours on each workday. The Moved column and the `impl` badge
 count only workdays, and the chart shades the other days grey. The hours of each member in `[team]`
 still decide on which days that member works.
+
+`issue_types` lists the Jira issue types that the plan takes from epics and sprints, and that the
+`velocity` command counts. The default is `["Story"]`, because bugs are normally part of the
+overhead: the time a team spends on them is in the hours that `velocity` measures, so the plan
+already allows for it. Add `"Bug"` or `"Task"` when the team estimates that work and wants to see it
+in the plan, such as `issue_types = ["Story", "Bug", "Task"]`. Measure the velocity again after the
+change, because those issues then count as planned work and no longer as overhead. A bug or task
+without points gets `default_hours`, just like a story. An issue listed under `[stories]` is always
+planned, whatever its type, so a bug listed there while `"Bug"` is not in `issue_types` is planned
+on top of the overhead that the velocity already includes.
 
 ## Team availability
 

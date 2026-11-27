@@ -25,8 +25,8 @@ python jira_smurf.py gantt -o gantt.html --history plannings --since 2026-10-01
 ```
 
 When no snapshot exists on or before the requested date, the oldest snapshot is used. A warning
-identifies any date substitution. Without `--since`, the chart shows no changes. The `serve` command
-takes the same `--history` and `--since` options.
+identifies any date substitution. The `serve` command takes the same `--history` and `--since`
+options.
 
 ## Reading changes
 
@@ -41,7 +41,8 @@ While a plan is compared:
   done now, it shows how much earlier or later it finished than planned; its tooltip also compares
   the working days it took with its estimate;
 - the line of an epic or space covers the same stories as its bar: with done stories hidden, only
-  its open stories;
+  its open stories. An epic without stories is not planned, so it does not count in the line or
+  the Moved value of its space;
 - yellow outlines identify work that should already have finished (set the color and the blinking
   with `behind_baseline_color` and `behind_baseline_blink` in `[visuals]`);
 - a final gray group lists the stories that were open in that plan and are no longer in the current

@@ -18,6 +18,8 @@ The tool has no version numbers yet. This file lists what changed each week, new
 - Clicking an epic in the Story column collapses or expands it.
 - New settings: `workdays`, `group_by_space`, and in `[visuals]` `days_off_bar_from`,
   `holiday_icon` and `enable_vacation_banners`.
+- The `issue_types` setting plans other Jira issue types too, such as bugs and tasks. The default is
+  only stories, because bugs are normally part of the overhead in the velocity.
 
 ### Changed
 
@@ -33,6 +35,7 @@ The tool has no version numbers yet. This file lists what changed each week, new
 - The vertical line under the mouse stays under the mouse after you scroll the Day or Week view.
 - Fit All marks its own button, not the button of the scale it picked.
 - With done stories hidden, the plan of an epic no longer looks later than it is.
+- An epic without stories no longer makes its space look much later in the Moved column.
 
 ## Week of 2026-11-16
 

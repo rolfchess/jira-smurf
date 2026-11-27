@@ -58,6 +58,13 @@ for rule in os.environ.get("JIRA_HIGHLIGHT_RULES", "").split("|"):
         print(f"Warning: ignoring invalid highlight rule: {rule}", file=sys.stderr)
 
 PAGE_SIZE = 100
+DEFAULT_ISSUE_TYPES = ("Story",)
+
+
+def issue_type_clause(issue_types):
+    """Return the JQL condition for issues of the given Jira issue types, such as 'issuetype in ("Story")'."""
+    names = ", ".join('"' + name.replace('"', '\\"') + '"' for name in issue_types)
+    return f"issuetype in ({names})"
 
 
 def validate_config():
@@ -205,6 +212,7 @@ class GanttConfig:
     work_start_progress: float  # progress of the status where work on a story starts, 0 if not set
     use_backlog_order: bool  # schedule stories in Jira backlog order instead of the order of the configuration file
     group_by_space: bool  # with use_backlog_order, put the epics under a header row per Jira space
+    issue_types: tuple  # the Jira issue types that are planned and counted in the velocity, such as ("Story",)
     dependency_links: list  # lowercase names of Jira link types that make a story wait for another
     auto_assign: bool  # give stories without a team member to the team; if False, plan them under "Unassigned"
     implementation_status: str  # status where open stories show their days of work in a badge, "" if not set
@@ -414,6 +422,12 @@ def load_gantt_config(path="gantt.toml"):
     include_future_sprints = raw.get("include_future_sprints", False)
     use_backlog_order = raw.get("use_backlog_order", False)
     group_by_space = raw.get("group_by_space", True)
+    issue_types = raw.get("issue_types", list(DEFAULT_ISSUE_TYPES))
+    if (not isinstance(issue_types, list) or not issue_types
+            or not all(isinstance(name, str) and name.strip() for name in issue_types)):
+        print(f"Error: 'issue_types' must be a list of Jira issue type names such as [\"Story\", \"Bug\"], "
+              f"got {issue_types!r}", file=sys.stderr)
+        sys.exit(1)
     dependency_links = raw.get("dependency_links", ["Blocks"])
     if not isinstance(dependency_links, list) or not all(isinstance(name, str) for name in dependency_links):
         print(f"Error: 'dependency_links' must be a list of Jira link type names, got {dependency_links!r}",
@@ -452,6 +466,7 @@ def load_gantt_config(path="gantt.toml"):
                        work_start_progress=work_start_progress,
                        use_backlog_order=use_backlog_order,
                        group_by_space=group_by_space,
+                       issue_types=tuple(name.strip() for name in issue_types),
                        dependency_links=[name.lower() for name in dependency_links],
                        auto_assign=auto_assign_team,
                        implementation_status=implementation_status or "",
@@ -569,8 +584,8 @@ def story_fields(start_date_field=None):
     return f"{fields},{start_date_field}" if start_date_field else fields
 
 
-def fetch_stories_for_epic(epic_key, start_date_field=None):
-    """Fetch all stories belonging to an epic.
+def fetch_stories_for_epic(epic_key, start_date_field=None, issue_types=DEFAULT_ISSUE_TYPES):
+    """Fetch all issues of the given issue types belonging to an epic.
 
     Tries next-gen (parent) first, falls back to classic (Epic Link).
     Returns list of issue dicts.
@@ -578,8 +593,8 @@ def fetch_stories_for_epic(epic_key, start_date_field=None):
     fields = story_fields(start_date_field)
 
     for jql in (
-        f"parent = {epic_key} AND issuetype = Story ORDER BY key ASC",
-        f'"Epic Link" = {epic_key} AND issuetype = Story ORDER BY key ASC',
+        f"parent = {epic_key} AND {issue_type_clause(issue_types)} ORDER BY key ASC",
+        f'"Epic Link" = {epic_key} AND {issue_type_clause(issue_types)} ORDER BY key ASC',
     ):
         issues = []
         next_page_token = None
@@ -661,11 +676,21 @@ def fetch_backlog_order(story_keys):
     return positions
 
 
-def fetch_finished_stories(start, end):
-    """Fetch the stories of the project that moved to a done status from start up to end (not included)."""
-    jql = (f'project = {JIRA_PROJECT} AND issuetype = Story AND statusCategory = Done '
+def issue_type_noun(name, count):
+    """Return a Jira issue type name as a lowercase noun for the count, such as "story", "stories" or "bugs"."""
+    noun = name.lower()
+    if count == 1:
+        return noun
+    if noun.endswith("y") and noun[-2:-1] not in ("a", "e", "i", "o", "u"):
+        return noun[:-1] + "ies"
+    return noun + ("es" if noun.endswith(("s", "x", "ch", "sh")) else "s")
+
+
+def fetch_finished_stories(start, end, issue_types=DEFAULT_ISSUE_TYPES):
+    """Fetch the issues of the given issue types that moved to a done status from start up to end (not included)."""
+    jql = (f'project = {JIRA_PROJECT} AND {issue_type_clause(issue_types)} AND statusCategory = Done '
            f'AND statusCategoryChangedDate >= "{start}" AND statusCategoryChangedDate < "{end}" ORDER BY key ASC')
-    fields = f"summary,assignee,statuscategorychangedate,{STORY_POINTS_FIELD},customfield_10016"
+    fields = f"summary,assignee,issuetype,statuscategorychangedate,{STORY_POINTS_FIELD},customfield_10016"
     issues = []
     next_page_token = None
     while True:
@@ -680,15 +705,15 @@ def fetch_finished_stories(start, end):
     return issues
 
 
-def fetch_sprint_stories(include_open, include_future, start_date_field=None):
-    """Fetch the project's stories in open sprints, future sprints or both."""
+def fetch_sprint_stories(include_open, include_future, start_date_field=None, issue_types=DEFAULT_ISSUE_TYPES):
+    """Fetch the project's issues of the given issue types in open sprints, future sprints or both."""
     sprint_functions = []
     if include_open:
         sprint_functions.append("openSprints()")
     if include_future:
         sprint_functions.append("futureSprints()")
     sprint_clause = " OR ".join(f"sprint in {f}" for f in sprint_functions)
-    jql = f"project = {JIRA_PROJECT} AND issuetype = Story AND ({sprint_clause}) ORDER BY key ASC"
+    jql = f"project = {JIRA_PROJECT} AND {issue_type_clause(issue_types)} AND ({sprint_clause}) ORDER BY key ASC"
     fields = story_fields(start_date_field)
     issues = []
     next_page_token = None
@@ -2640,12 +2665,16 @@ function compareGroups() {{
     delete task.base_start;
     delete task.base_end;
     delete task.moved_days;
+    var end = null;
     children.forEach(function(child) {{
-      if (!child.base_start || !isShown(child)) return;
+      // An epic without stories is not planned and is not in a stored plan, so it counts in neither end
+      if (!isShown(child) || child.roadmap) return;
+      if (!end || child.end_date > end) end = child.end_date;
+      if (!child.base_start) return;
       if (!task.base_start || child.base_start < task.base_start) task.base_start = child.base_start;
       if (!task.base_end || child.base_end > task.base_end) task.base_end = child.base_end;
     }});
-    if (task.base_end) task.moved_days = workingDaysBetween(parse(task.base_end), task.end_date);
+    if (task.base_end && end) task.moved_days = workingDaysBetween(parse(task.base_end), end);
   }}
   function children(task) {{
     return gantt.getChildren(task.id).map(function(id) {{ return gantt.getTask(id); }});
@@ -3698,7 +3727,8 @@ def run_gantt(config_path, history_dir=None, since=None):
         if config.epics:
             print(f"Fetching the stories of {len(config.epics)} "
                   f"{'epic' if len(config.epics) == 1 else 'epics'}...", file=sys.stderr)
-        epic_results = pool.map(lambda key: fetch_stories_for_epic(key, start_date_field), config.epics)
+        epic_results = pool.map(lambda key: fetch_stories_for_epic(key, start_date_field, config.issue_types),
+                                config.epics)
         if config.stories:
             print(f"Fetching {len(config.stories)} individual stories...", file=sys.stderr)
         individual_result = pool.submit(fetch_stories_by_keys, config.stories,
@@ -3706,7 +3736,7 @@ def run_gantt(config_path, history_dir=None, since=None):
         if include_sprints:
             print("Fetching sprint stories...", file=sys.stderr)
         sprint_result = (pool.submit(fetch_sprint_stories, config.include_open_sprints,
-                                     config.include_future_sprints, start_date_field)
+                                     config.include_future_sprints, start_date_field, config.issue_types)
                          if include_sprints else None)
         epic_results = list(epic_results)
 
@@ -3962,7 +3992,8 @@ def run_velocity(config_path, weeks):
     points = {w: 0.0 for w in week_starts}
     pointed = {w: 0 for w in week_starts}
     unpointed = {w: 0 for w in week_starts}
-    for issue in fetch_finished_stories(start, end):
+    unpointed_types = {}  # the number of issues without points per issue type, such as {"Bug": 2}
+    for issue in fetch_finished_stories(start, end, config.issue_types):
         fields = issue["fields"]
         if get_assignee(fields) not in config.team:
             continue
@@ -3973,6 +4004,8 @@ def run_velocity(config_path, weeks):
         story_points = get_story_points_numeric(fields)
         if story_points is None:
             unpointed[week] += 1
+            issue_type = (fields.get("issuetype") or {}).get("name") or "Story"
+            unpointed_types[issue_type] = unpointed_types.get(issue_type, 0) + 1
             story_points = assumed_points
         else:
             pointed[week] += 1
@@ -4006,8 +4039,11 @@ def run_velocity(config_path, weeks):
     else:
         print(f"No stories with story points were finished in the last {weeks} weeks.")
     if total_unpointed:
-        stories = "story had" if total_unpointed == 1 else "stories had"
-        print(f"{total_unpointed} finished {stories} no story points. Each counts as {assumed_points:.1f} points: "
+        order = [name.lower() for name in config.issue_types]
+        names = sorted(unpointed_types, key=lambda name: order.index(name.lower()) if name.lower() in order else len(order))
+        counts = [f"{unpointed_types[name]} finished {issue_type_noun(name, unpointed_types[name])}" for name in names]
+        listed = counts[0] if len(counts) == 1 else ", ".join(counts[:-1]) + " and " + counts[-1]
+        print(f"{listed} had no story points. Each counts as {assumed_points:.1f} points: "
               f"default_hours {config.default_hours:g} divided by velocity {config.velocity:g}.")
 
 
