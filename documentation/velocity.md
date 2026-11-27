@@ -11,13 +11,22 @@ python jira_smurf.py velocity --weeks 4
 ```
 
 By default, the command measures the last eight complete Monday-to-Sunday weeks. For each week it
-divides the available team hours from `gantt.toml` by the points completed by team members.
+divides the available team hours from `gantt.toml` by the points completed by team members. For
+example, with `--weeks 2`:
 
-| Week      | Available hours | Points done | Hours per point |
-| --------- | --------------: | ----------: | --------------: |
-| 1         |             120 |          15 |               8 |
-| 2         |             120 |          10 |              12 |
-| **Total** |         **240** |      **25** |         **9.6** |
+```text
+Week         Hours  Stories  Points  Hours/point  No points
+2026-W46       120        3    15.0          8.0          1
+2026-W47       120        3    10.0         12.0          0
+Total          240        6    25.0          9.6          1
+
+Velocity over the last 2 weeks: 9.6 hours per story point. gantt.toml uses 8.0.
+1 finished story had no story points. Each counts as 5.0 points: default_hours 40 divided by velocity 8.
+```
+
+Hours are the available team hours of the week. Stories is the number of finished stories with
+points, and No points the number without. Points adds up both: in week 46, three stories with 10
+points and one story without points, which counts as 5.
 
 Use the total—9.6 in this example—as `velocity` in `gantt.toml`. A longer representative period is
 usually more stable than one unusually fast week.
